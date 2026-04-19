@@ -70,7 +70,12 @@ export function Navbar() {
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#3D2C8D] to-[#7B5EDB] flex items-center justify-center">
             <Sparkles className="w-4 h-4 text-white" />
           </div>
-          <span className="font-bold text-white text-lg hidden sm:block">KairoForge</span>
+          <div className="hidden sm:flex flex-col leading-none">
+            <span className="font-bold text-white text-lg leading-tight">KairoForge</span>
+            <span className="text-[#6b6b80] text-[10px] font-medium tracking-widest uppercase leading-tight">
+              Equity Intelligence Terminal
+            </span>
+          </div>
         </Link>
 
         {/* Desktop nav */}

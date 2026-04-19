@@ -14,7 +14,12 @@ export function Footer() {
               <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#3D2C8D] to-[#7B5EDB] flex items-center justify-center">
                 <Sparkles className="w-3.5 h-3.5 text-white" />
               </div>
-              <span className="font-bold text-white">KairoForge</span>
+              <div className="flex flex-col leading-none">
+                <span className="font-bold text-white">KairoForge</span>
+                <span className="text-[#6b6b80] text-[9px] font-medium tracking-widest uppercase leading-tight">
+                  Equity Intelligence Terminal
+                </span>
+              </div>
             </div>
             <p className="text-[#6b6b80] text-sm leading-relaxed max-w-sm">
               AI-powered fundamental analysis for Indian stocks. Research smarter, not harder.
