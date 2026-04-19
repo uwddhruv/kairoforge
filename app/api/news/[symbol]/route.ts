@@ -21,9 +21,10 @@ async function fetchGNewsHeadlines(symbol: string, companyName: string) {
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { symbol: string } }
+  { params }: { params: Promise<{ symbol: string }> }
 ) {
-  const symbol = params.symbol.toUpperCase();
+  const { symbol: rawSymbol } = await params;
+  const symbol = rawSymbol.toUpperCase();
 
   try {
     // Check cache

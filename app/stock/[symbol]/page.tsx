@@ -10,11 +10,12 @@ import type { Metadata } from 'next';
 import { TrendingUp, Building2, Tag } from 'lucide-react';
 
 interface Props {
-  params: { symbol: string };
+  params: Promise<{ symbol: string }>;
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const stock = await prisma.stock.findUnique({ where: { symbol: params.symbol.toUpperCase() } });
+  const { symbol: rawSymbol } = await params;
+  const stock = await prisma.stock.findUnique({ where: { symbol: rawSymbol.toUpperCase() } });
   if (!stock) return { title: 'Stock Not Found' };
   return {
     title: `${stock.symbol} — ${stock.name}`,
@@ -23,7 +24,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function StockPage({ params }: Props) {
-  const symbol = params.symbol.toUpperCase();
+  const { symbol: rawSymbol } = await params;
+  const symbol = rawSymbol.toUpperCase();
   const stock = await prisma.stock.findUnique({ where: { symbol } });
 
   if (!stock) notFound();

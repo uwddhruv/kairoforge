@@ -4,9 +4,10 @@ import { calculateStockScore } from '@/lib/scoring';
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { symbol: string } }
+  { params }: { params: Promise<{ symbol: string }> }
 ) {
-  const symbol = params.symbol.toUpperCase();
+  const { symbol: rawSymbol } = await params;
+  const symbol = rawSymbol.toUpperCase();
 
   try {
     const stock = await prisma.stock.findUnique({ where: { symbol } });
