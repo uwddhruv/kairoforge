@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "npm run db:setup && next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "npm run db:setup && next start",
     "lint": "next lint",
-    "db:push": "prisma db push",
-    "db:seed": "tsx scripts/seed-stocks.ts",
+    "db:push": "DATABASE_URL=${DATABASE_URL:-file:./dev.db} prisma db push",
+    "db:seed": "DATABASE_URL=${DATABASE_URL:-file:./dev.db} tsx scripts/seed-stocks.ts",
+    "db:setup": "npm run db:push && npm run db:seed",
     "postinstall": "prisma generate"
   },
   "dependencies": {
