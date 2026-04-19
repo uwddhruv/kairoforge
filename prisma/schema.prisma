@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Stock {
+  id                String   @id @default(cuid())
+  symbol            String   @unique
+  name              String
+  exchange          String   @default("NSE")
+  sector            String   @default("")
+  industry          String   @default("")
+  marketCap         Float    @default(0)
+  marketCapCategory String   @default("Small Cap")
+  currentPrice      Float    @default(0)
+  high52w           Float    @default(0)
+  low52w            Float    @default(0)
+  stockPE           Float    @default(0)
+  bookValue         Float    @default(0)
+  dividendYield     Float    @default(0)
+  roce              Float    @default(0)
+  roe               Float    @default(0)
+  faceValue         Float    @default(1)
+  intrinsicValue    Float    @default(0)
+  grahamNumber      Float    @default(0)
+  salesGrowth5yr    Float    @default(0)
+  pegRatio          Float    @default(0)
+  profitVar5yr      Float    @default(0)
+  piotroskiScore    Float    @default(0)
+  debtToEquity      Float    @default(0)
+  currentRatio      Float    @default(0)
+  quickRatio        Float    @default(0)
+  freeCashFlow3yr   Float    @default(0)
+  debt              Float    @default(0)
+  netDebt           Float    @default(0)
+  eps               Float    @default(0)
+  pbRatio           Float    @default(0)
+  evEbitda          Float    @default(0)
+  promoterHolding   Float    @default(0)
+  fiiHolding        Float    @default(0)
+  diiHolding        Float    @default(0)
+  lastUpdated       DateTime @default(now())
+}
+
+model StockOfDay {
+  id        String   @id @default(cuid())
+  symbol    String
+  date      String   @unique
+  analysis  String
+  createdAt DateTime @default(now())
+}
+
+model NewsCache {
+  id       String   @id @default(cuid())
+  symbol   String   @unique
+  data     String
+  cachedAt DateTime @default(now())
+}
+
+model MetricExplanation {
+  id          String   @id @default(cuid())
+  metricName  String   @unique
+  explanation String
+  createdAt   DateTime @default(now())
+}
