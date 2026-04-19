@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import { Navbar } from '@/components/layout/Navbar';
 import { Footer } from '@/components/layout/Footer';
+import { KAIROFORGE_LOGO_URL } from '@/lib/branding';
 
 export const metadata: Metadata = {
   title: {
@@ -16,6 +17,11 @@ export const metadata: Metadata = {
     title: 'KairoForge — AI-Powered Indian Stock Research',
     description: 'Discover, screen, and analyze Indian stocks with AI.',
     type: 'website',
+  },
+  icons: {
+    icon: KAIROFORGE_LOGO_URL,
+    shortcut: KAIROFORGE_LOGO_URL,
+    apple: KAIROFORGE_LOGO_URL,
   },
 };
 
