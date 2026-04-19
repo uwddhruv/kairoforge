@@ -17,6 +17,11 @@ export const metadata: Metadata = {
     description: 'Discover, screen, and analyze Indian stocks with AI.',
     type: 'website',
   },
+  icons: {
+    icon: 'https://github.com/user-attachments/assets/66cc4d53-bb18-443b-9f93-a08de797968a',
+    shortcut: 'https://github.com/user-attachments/assets/66cc4d53-bb18-443b-9f93-a08de797968a',
+    apple: 'https://github.com/user-attachments/assets/66cc4d53-bb18-443b-9f93-a08de797968a',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
