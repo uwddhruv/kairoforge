@@ -9,12 +9,12 @@ export const metadata: Metadata = {
     template: '%s | KairoForge',
   },
   description:
-    'Discover, screen, and analyse Indian stocks with AI. Ask natural language questions about NSE/BSE stocks and get data-driven insights.',
+    'Discover, screen, and analyze Indian stocks with AI. Ask natural language questions about NSE/BSE stocks and get data-driven insights.',
   keywords: ['Indian stocks', 'NSE', 'BSE', 'stock screener', 'AI stock analysis', 'fundamental analysis'],
   authors: [{ name: 'KairoForge' }],
   openGraph: {
     title: 'KairoForge — AI-Powered Indian Stock Research',
-    description: 'Discover, screen, and analyse Indian stocks with AI.',
+    description: 'Discover, screen, and analyze Indian stocks with AI.',
     type: 'website',
   },
 };

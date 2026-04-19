@@ -8,7 +8,7 @@ export function LoadingOrb() {
         <div className="absolute inset-2 rounded-full border-2 border-[#7B5EDB]/40 animate-spin border-t-[#7B5EDB]" />
         <div className="absolute inset-4 rounded-full bg-[#7B5EDB]/10 animate-pulse" />
       </div>
-      <div className="text-[#6b6b80] text-sm animate-pulse">Analysing with AI...</div>
+      <div className="text-[#6b6b80] text-sm animate-pulse">Analyzing with AI...</div>
     </div>
   );
 }
