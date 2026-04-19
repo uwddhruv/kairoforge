@@ -1,5 +1,7 @@
 import Link from 'next/link';
-import { Sparkles, Github, Mail, ExternalLink } from 'lucide-react';
+import Image from 'next/image';
+import { Mail, ExternalLink } from 'lucide-react';
+import { KAIROFORGE_LOGO_URL } from '@/lib/branding';
 
 export function Footer() {
   const currentYear = new Date().getFullYear();
@@ -11,9 +13,11 @@ export function Footer() {
           {/* Brand */}
           <div className="md:col-span-2">
             <div className="flex items-center gap-2 mb-3">
-              <img
-                src="https://github.com/user-attachments/assets/66cc4d53-bb18-443b-9f93-a08de797968a"
+              <Image
+                src={KAIROFORGE_LOGO_URL}
                 alt="KairoForge logo"
+                width={28}
+                height={28}
                 className="w-7 h-7 rounded-lg object-cover"
               />
               <div className="flex flex-col leading-none">

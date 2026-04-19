@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import { Navbar } from '@/components/layout/Navbar';
 import { Footer } from '@/components/layout/Footer';
+import { KAIROFORGE_LOGO_URL } from '@/lib/branding';
 
 export const metadata: Metadata = {
   title: {
@@ -18,9 +19,9 @@ export const metadata: Metadata = {
     type: 'website',
   },
   icons: {
-    icon: 'https://github.com/user-attachments/assets/66cc4d53-bb18-443b-9f93-a08de797968a',
-    shortcut: 'https://github.com/user-attachments/assets/66cc4d53-bb18-443b-9f93-a08de797968a',
-    apple: 'https://github.com/user-attachments/assets/66cc4d53-bb18-443b-9f93-a08de797968a',
+    icon: KAIROFORGE_LOGO_URL,
+    shortcut: KAIROFORGE_LOGO_URL,
+    apple: KAIROFORGE_LOGO_URL,
   },
 };
 

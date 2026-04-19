@@ -1,12 +1,14 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
 import { Search, BookMarked, GitCompare, SlidersHorizontal, Sparkles, Menu, X } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import axios from 'axios';
 import { useRouter } from 'next/navigation';
+import { KAIROFORGE_LOGO_URL } from '@/lib/branding';
 
 const NAV_LINKS = [
   { href: '/discover', label: 'Discover', icon: Sparkles },
@@ -67,9 +69,11 @@ export function Navbar() {
       <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 shrink-0">
-          <img
-            src="https://github.com/user-attachments/assets/66cc4d53-bb18-443b-9f93-a08de797968a"
+          <Image
+            src={KAIROFORGE_LOGO_URL}
             alt="KairoForge logo"
+            width={32}
+            height={32}
             className="w-8 h-8 rounded-lg object-cover"
           />
           <div className="hidden sm:flex flex-col leading-none">
