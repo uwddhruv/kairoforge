@@ -4,6 +4,11 @@ import { parseScreenerQuery } from '@/lib/openai';
 
 const MAX_FALLBACK_TOKENS = 5;
 const FALLBACK_RESULT_LIMIT = 20;
+const FALLBACK_EXPLANATIONS = {
+  noAiKey: 'Showing keyword-based results (AI parser unavailable).',
+  parseFailed: 'Showing keyword-based results (AI parser temporarily unavailable).',
+  noStrictMatches: 'No strict AI matches found, showing closest keyword-based results.',
+};
 
 async function runFallbackSearch(query: string, explanation: string) {
   const trimmed = query.trim();
@@ -115,7 +120,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!process.env.OPENAI_API_KEY) {
-      return runFallbackSearch(query, 'Showing keyword-based results (AI parser unavailable).');
+      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noAiKey);
     }
 
     // Parse query with AI
@@ -124,7 +129,7 @@ export async function POST(req: NextRequest) {
       filters = await parseScreenerQuery(query);
     } catch (parseError) {
       console.error('Screener parse fallback:', parseError);
-      return runFallbackSearch(query, 'Showing keyword-based results (AI parser temporarily unavailable).');
+      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.parseFailed);
     }
 
     const {
@@ -188,7 +193,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (results.length === 0) {
-      return runFallbackSearch(query, 'No strict AI matches found, showing closest keyword-based results.');
+      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noStrictMatches);
     }
 
     return NextResponse.json({ results, count: results.length, filters, explanation: (filters as { explanation?: string }).explanation });
