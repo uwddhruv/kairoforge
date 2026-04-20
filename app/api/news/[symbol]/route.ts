@@ -58,9 +58,9 @@ async function fetchGoogleNewsRssHeadlines(symbol: string, companyName: string):
     const xml = response.data;
 
     const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
-    return items.slice(0, MAX_NEWS_ARTICLES).map((item) => {
+    return items.map((item) => {
       const title = cleanRssText(item.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? '');
-      const link = cleanRssText(item.match(/<link>([\s\S]*?)<\/link>/)?.[1] ?? '');
+      const url = cleanRssText(item.match(/<link>([\s\S]*?)<\/link>/)?.[1] ?? '');
       const description = cleanRssText(item.match(/<description>([\s\S]*?)<\/description>/)?.[1] ?? '');
       const publishedAtRaw = cleanRssText(item.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1] ?? '');
       const sourceName = cleanRssText(item.match(/<source[^>]*>([\s\S]*?)<\/source>/)?.[1] ?? '');
@@ -68,11 +68,11 @@ async function fetchGoogleNewsRssHeadlines(symbol: string, companyName: string):
       return {
         title,
         description: description || undefined,
-        url: link,
+        url,
         publishedAt: publishedAtRaw,
         source: sourceName ? { name: sourceName } : undefined,
       };
-    }).filter(isValidArticle);
+    }).filter(isValidArticle).slice(0, MAX_NEWS_ARTICLES);
   } catch {
     return [];
   }
