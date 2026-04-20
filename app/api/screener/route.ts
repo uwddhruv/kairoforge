@@ -4,6 +4,9 @@ import { parseScreenerQuery } from '@/lib/openai';
 
 const MAX_FALLBACK_TOKENS = 8;
 const FALLBACK_RESULT_LIMIT = 20;
+const MAX_LOCAL_PARSE_QUERY_LENGTH = 300;
+const MIN_RESULT_LIMIT = 1;
+const MAX_RESULT_LIMIT = 50;
 const FALLBACK_EXPLANATIONS = {
   noAiKey: 'AI parser unavailable, using local prompt parsing.',
   parseFailed: 'AI parser temporarily unavailable, using local prompt parsing.',
@@ -44,9 +47,10 @@ function extractNumberFromPattern(query: string, patterns: RegExp[]): number | u
 }
 
 function parseScreenerQueryLocally(query: string): Record<string, unknown> {
-  const normalized = query.toLowerCase();
+  const boundedQuery = query.slice(0, MAX_LOCAL_PARSE_QUERY_LENGTH);
+  const normalized = boundedQuery.toLowerCase();
   const filters: Record<string, unknown> = {
-    keywords: extractSearchTokens(query, 6),
+    keywords: extractSearchTokens(boundedQuery, 6),
   };
   const explanationParts: string[] = [];
 
@@ -69,7 +73,7 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     explanationParts.push('marketCapCategory=Small Cap');
   }
 
-  const minROE = extractNumberFromPattern(query, [
+  const minROE = extractNumberFromPattern(boundedQuery, [
     /\broe\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
     /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*\broe\b/i,
   ]);
@@ -78,7 +82,7 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     explanationParts.push(`minROE=${minROE}`);
   }
 
-  const maxPE = extractNumberFromPattern(query, [
+  const maxPE = extractNumberFromPattern(boundedQuery, [
     /\b(?:pe|p\/e)\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
     /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:\bpe\b|\bp\/e\b)/i,
   ]);
@@ -87,7 +91,7 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     explanationParts.push(`maxPE=${maxPE}`);
   }
 
-  const maxDebt = extractNumberFromPattern(query, [
+  const maxDebt = extractNumberFromPattern(boundedQuery, [
     /\b(?:debt(?:\s*to\s*equity)?|d\/e)\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
     /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:debt|debt\s*to\s*equity|d\/e)/i,
   ]);
@@ -96,7 +100,7 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     explanationParts.push(`maxDebt=${maxDebt}`);
   }
 
-  const minDividendYield = extractNumberFromPattern(query, [
+  const minDividendYield = extractNumberFromPattern(boundedQuery, [
     /\bdividend(?:\s*yield)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
     /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*dividend(?:\s*yield)?/i,
   ]);
@@ -105,7 +109,7 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     explanationParts.push(`minDividendYield=${minDividendYield}`);
   }
 
-  const minSalesGrowth5yr = extractNumberFromPattern(query, [
+  const minSalesGrowth5yr = extractNumberFromPattern(boundedQuery, [
     /\bsales\s*growth\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
     /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*sales\s*growth/i,
   ]);
@@ -131,9 +135,9 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     filters.sortOrder = 'desc';
   }
 
-  const limit = extractNumberFromPattern(query, [/\b(?:top|best|show|list)\s+(\d{1,3})\b/i]);
+  const limit = extractNumberFromPattern(boundedQuery, [/\b(?:top|best|show|list)\s+(\d{1,3})\b/i]);
   if (limit !== undefined) {
-    filters.limit = Math.max(1, Math.min(50, Math.trunc(limit)));
+    filters.limit = Math.max(MIN_RESULT_LIMIT, Math.min(MAX_RESULT_LIMIT, Math.trunc(limit)));
   }
 
   filters.explanation =
@@ -322,11 +326,11 @@ export async function POST(req: NextRequest) {
     const hasStructuredFilters = Boolean(
       sector ||
       marketCapCategory ||
-      (minROE && minROE > 0) ||
-      (maxPE && maxPE > 0) ||
-      (maxDebtToEquity && maxDebtToEquity > 0) ||
-      (minDividendYield && minDividendYield > 0) ||
-      (minSalesGrowth5yr && minSalesGrowth5yr > 0)
+      (typeof minROE === 'number' && minROE > 0) ||
+      (typeof maxPE === 'number' && maxPE > 0) ||
+      (typeof maxDebtToEquity === 'number' && maxDebtToEquity > 0) ||
+      (typeof minDividendYield === 'number' && minDividendYield > 0) ||
+      (typeof minSalesGrowth5yr === 'number' && minSalesGrowth5yr > 0)
     );
 
     if (!hasStructuredFilters) {
