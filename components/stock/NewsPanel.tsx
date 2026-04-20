@@ -42,7 +42,7 @@ export function NewsPanel({ symbol, companyName }: Props) {
 
       {!isLoading && articles.length === 0 && (
         <p className="text-[#6b6b80] text-sm py-2">
-          No recent news available. Configure GNEWS_API_KEY for live headlines.
+          No recent news available right now. Please check back later.
         </p>
       )}
 

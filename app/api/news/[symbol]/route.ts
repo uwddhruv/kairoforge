@@ -3,17 +3,87 @@ import prisma from '@/lib/prisma';
 import axios from 'axios';
 
 const NEWS_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_NEWS_ARTICLES = 6;
+
+interface NewsArticle {
+  title: string;
+  description?: string;
+  url: string;
+  publishedAt: string;
+  source?: { name: string };
+}
+
+function isValidArticle(article: Partial<NewsArticle>): article is NewsArticle {
+  const title = article.title?.trim();
+  const url = article.url?.trim();
+  const publishedAt = article.publishedAt?.trim();
+
+  if (!title || !url || !publishedAt) return false;
+  return !Number.isNaN(Date.parse(publishedAt));
+}
 
 async function fetchGNewsHeadlines(symbol: string, companyName: string) {
-  // Use a public RSS/news aggregation to get headlines
-  // This uses GNews API if key available, otherwise falls back to placeholder
+  const apiKey = process.env.GNEWS_API_KEY;
+  if (!apiKey) return [];
+
   try {
     const query = encodeURIComponent(`${companyName} ${symbol} NSE`);
     const response = await axios.get(
-      `https://gnews.io/api/v4/search?q=${query}&lang=en&country=in&max=6&token=${process.env.GNEWS_API_KEY ?? ''}`,
+      `https://gnews.io/api/v4/search?q=${query}&lang=en&country=in&max=${MAX_NEWS_ARTICLES}&token=${apiKey}`,
       { timeout: 5000 }
     );
     return response.data.articles ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function cleanRssText(text: string): string {
+  return text
+    .replace(/^<!\[CDATA\[/, '')
+    .replace(/\]\]>$/, '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim();
+}
+
+async function fetchGoogleNewsRssHeadlines(symbol: string, companyName: string): Promise<NewsArticle[]> {
+  try {
+    const query = encodeURIComponent(`${companyName} ${symbol} NSE stock`);
+    const url = `https://news.google.com/rss/search?q=${query}&hl=en-IN&gl=IN&ceid=IN:en`;
+    const response = await axios.get<string>(url, { timeout: 5000, responseType: 'text' });
+    const xml = response.data;
+
+    const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
+    const articles: NewsArticle[] = [];
+
+    for (const item of items) {
+      if (articles.length >= MAX_NEWS_ARTICLES) break;
+
+      const title = cleanRssText(item.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? '');
+      const url = cleanRssText(item.match(/<link>([\s\S]*?)<\/link>/)?.[1] ?? '');
+      const description = cleanRssText(item.match(/<description>([\s\S]*?)<\/description>/)?.[1] ?? '');
+      const publishedAtRaw = cleanRssText(item.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1] ?? '');
+      const sourceName = cleanRssText(item.match(/<source[^>]*>([\s\S]*?)<\/source>/)?.[1] ?? '');
+
+      const candidate = {
+        title,
+        description: description || undefined,
+        url,
+        publishedAt: publishedAtRaw,
+        source: sourceName ? { name: sourceName } : undefined,
+      };
+
+      if (isValidArticle(candidate)) {
+        articles.push(candidate);
+      }
+    }
+
+    return articles;
   } catch {
     return [];
   }
@@ -38,7 +108,13 @@ export async function GET(
       select: { name: true, symbol: true },
     });
 
-    const articles = stock ? await fetchGNewsHeadlines(symbol, stock.name) : [];
+    let articles: NewsArticle[] = [];
+    if (stock) {
+      articles = await fetchGNewsHeadlines(symbol, stock.name);
+      if (articles.length === 0) {
+        articles = await fetchGoogleNewsRssHeadlines(symbol, stock.name);
+      }
+    }
 
     // Cache the result
     if (articles.length > 0) {
