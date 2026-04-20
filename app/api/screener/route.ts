@@ -2,6 +2,63 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { parseScreenerQuery } from '@/lib/openai';
 
+const MAX_FALLBACK_TOKENS = 3;
+const FALLBACK_RESULT_LIMIT = 20;
+const FALLBACK_EXPLANATIONS = {
+  noAiKey: 'Showing keyword-based results (AI parser unavailable).',
+  parseFailed: 'Showing keyword-based results (AI parser temporarily unavailable).',
+  noStrictMatches: 'No strict AI matches found, showing closest keyword-based results.',
+};
+
+async function runFallbackSearch(query: string, explanation: string) {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return NextResponse.json({ results: [], count: 0, explanation });
+  }
+
+  const tokens = extractSearchTokens(trimmed, MAX_FALLBACK_TOKENS);
+  const ors = tokens.flatMap((token) => [
+    { symbol: { contains: token.toUpperCase() } },
+    { name: { contains: token } },
+    { sector: { contains: token } },
+    { industry: { contains: token } },
+  ]);
+
+  const results = await prisma.stock.findMany({
+    where: ors.length > 0 ? { OR: ors } : undefined,
+    orderBy: { marketCap: 'desc' },
+    take: FALLBACK_RESULT_LIMIT,
+    select: {
+      symbol: true,
+      name: true,
+      sector: true,
+      marketCapCategory: true,
+      currentPrice: true,
+      marketCap: true,
+      stockPE: true,
+      roe: true,
+      roce: true,
+      debtToEquity: true,
+      dividendYield: true,
+      salesGrowth5yr: true,
+      high52w: true,
+      low52w: true,
+      promoterHolding: true,
+    },
+  });
+
+  return NextResponse.json({
+    results,
+    count: results.length,
+    filters: null,
+    explanation,
+  });
+}
+
+function extractSearchTokens(query: string, maxTokens: number): string[] {
+  return Array.from(new Set(query.split(/\s+/).filter(Boolean))).slice(0, maxTokens);
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
@@ -66,8 +123,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Query required' }, { status: 400 });
     }
 
+    if (!process.env.OPENAI_API_KEY) {
+      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noAiKey);
+    }
+
     // Parse query with AI
-    const filters = await parseScreenerQuery(query);
+    let filters: Record<string, unknown>;
+    try {
+      filters = await parseScreenerQuery(query);
+    } catch (parseError) {
+      console.error('Screener parse fallback:', parseError);
+      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.parseFailed);
+    }
+
     const {
       sector,
       marketCapCategory,
@@ -127,6 +195,10 @@ export async function POST(req: NextRequest) {
         promoterHolding: true,
       },
     });
+
+    if (results.length === 0) {
+      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noStrictMatches);
+    }
 
     return NextResponse.json({ results, count: results.length, filters, explanation: (filters as { explanation?: string }).explanation });
   } catch (err) {
