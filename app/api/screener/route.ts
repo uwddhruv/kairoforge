@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { parseScreenerQuery } from '@/lib/openai';
 
-const MAX_FALLBACK_TOKENS = 5;
+const MAX_FALLBACK_TOKENS = 3;
 const FALLBACK_RESULT_LIMIT = 20;
 const FALLBACK_EXPLANATIONS = {
   noAiKey: 'Showing keyword-based results (AI parser unavailable).',
@@ -16,7 +16,7 @@ async function runFallbackSearch(query: string, explanation: string) {
     return NextResponse.json({ results: [], count: 0, explanation });
   }
 
-  const tokens = Array.from(new Set(trimmed.split(/\s+/).filter(Boolean))).slice(0, MAX_FALLBACK_TOKENS);
+  const tokens = extractSearchTokens(trimmed, MAX_FALLBACK_TOKENS);
   const ors = tokens.flatMap((token) => [
     { symbol: { contains: token.toUpperCase() } },
     { name: { contains: token } },
@@ -53,6 +53,10 @@ async function runFallbackSearch(query: string, explanation: string) {
     filters: null,
     explanation,
   });
+}
+
+function extractSearchTokens(query: string, maxTokens: number): string[] {
+  return Array.from(new Set(query.split(/\s+/).filter(Boolean))).slice(0, maxTokens);
 }
 
 export async function GET(req: NextRequest) {

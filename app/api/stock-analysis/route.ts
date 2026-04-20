@@ -20,7 +20,7 @@ function buildFallbackAnalysis(symbol: string, stockData: Record<string, unknown
   const roe = toNumber(stockData.roe);
   const debtToEquity = toNumber(stockData.debtToEquity);
   const salesGrowth5yr = toNumber(stockData.salesGrowth5yr);
-  const profitVar5yr = toNumber(stockData.profitVar5yr);
+  const profitChange5yr = toNumber(stockData.profitVar5yr);
   const dividendYield = toNumber(stockData.dividendYield);
 
   const pros: string[] = [];
@@ -33,7 +33,7 @@ function buildFallbackAnalysis(symbol: string, stockData: Record<string, unknown
 
   if (pe !== null && pe > FUNDAMENTAL_THRESHOLDS.expensivePe) cons.push(`Valuation looks expensive with P/E at ${pe.toFixed(1)}.`);
   if (debtToEquity !== null && debtToEquity > FUNDAMENTAL_THRESHOLDS.highDebtToEquity) cons.push(`Leverage risk: debt-to-equity is ${debtToEquity.toFixed(2)}.`);
-  if (profitVar5yr !== null && profitVar5yr < 0) cons.push(`5Y profit trend is weak at ${profitVar5yr.toFixed(1)}%.`);
+  if (profitChange5yr !== null && profitChange5yr < 0) cons.push(`5Y profit trend is weak at ${profitChange5yr.toFixed(1)}%.`);
   if (roe !== null && roe < FUNDAMENTAL_THRESHOLDS.lowRoe) cons.push(`ROE at ${roe.toFixed(1)}% is below ideal profitability levels.`);
 
   if (pros.length === 0) pros.push('Financial profile appears mixed with no standout strength from available metrics.');
