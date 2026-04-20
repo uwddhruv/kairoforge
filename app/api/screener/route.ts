@@ -5,8 +5,8 @@ import { parseScreenerQuery } from '@/lib/openai';
 const MAX_FALLBACK_TOKENS = 8;
 const FALLBACK_RESULT_LIMIT = 20;
 const FALLBACK_EXPLANATIONS = {
-  noAiKey: 'Showing keyword-based results (AI parser unavailable).',
-  parseFailed: 'Showing keyword-based results (AI parser temporarily unavailable).',
+  noAiKey: 'AI parser unavailable, using local prompt parsing.',
+  parseFailed: 'AI parser temporarily unavailable, using local prompt parsing.',
   noStrictMatches: 'No strict AI matches found, showing closest keyword-based results.',
 };
 
@@ -15,6 +15,134 @@ const STOP_WORDS = new Set([
   'in', 'into', 'is', 'like', 'of', 'on', 'or', 'stocks', 'stock', 'the', 'to', 'top',
   'with', 'without',
 ]);
+
+const SECTOR_MATCHERS: Array<{ sector: string; keywords: string[] }> = [
+  { sector: 'IT', keywords: ['it', 'software', 'tech', 'technology'] },
+  { sector: 'Banking', keywords: ['bank', 'banking', 'financial', 'finance'] },
+  { sector: 'FMCG', keywords: ['fmcg', 'consumer staples', 'consumer goods'] },
+  { sector: 'Pharma', keywords: ['pharma', 'pharmaceutical', 'healthcare'] },
+  { sector: 'Auto', keywords: ['auto', 'automobile'] },
+  { sector: 'Metals', keywords: ['metal', 'metals', 'mining'] },
+  { sector: 'Energy', keywords: ['energy', 'power', 'oil', 'gas'] },
+  { sector: 'Infra', keywords: ['infra', 'infrastructure', 'construction'] },
+  { sector: 'Realty', keywords: ['realty', 'real estate'] },
+  { sector: 'Telecom', keywords: ['telecom', 'telecommunications'] },
+];
+
+function extractNumberFromPattern(query: string, patterns: RegExp[]): number | undefined {
+  for (const pattern of patterns) {
+    const match = query.match(pattern);
+    if (!match) continue;
+    for (let idx = match.length - 1; idx >= 1; idx -= 1) {
+      const raw = match[idx];
+      if (!raw) continue;
+      const parsed = parseFloat(raw.replace(/,/g, ''));
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function parseScreenerQueryLocally(query: string): Record<string, unknown> {
+  const normalized = query.toLowerCase();
+  const filters: Record<string, unknown> = {
+    keywords: extractSearchTokens(query, 6),
+  };
+  const explanationParts: string[] = [];
+
+  const sectorMatch = SECTOR_MATCHERS.find(({ keywords }) =>
+    keywords.some((keyword) => normalized.includes(keyword))
+  );
+  if (sectorMatch) {
+    filters.sector = sectorMatch.sector;
+    explanationParts.push(`sector=${sectorMatch.sector}`);
+  }
+
+  if (/\blarge\s*cap\b|\bbluechip\b/.test(normalized)) {
+    filters.marketCapCategory = 'Large Cap';
+    explanationParts.push('marketCapCategory=Large Cap');
+  } else if (/\bmid\s*cap\b/.test(normalized)) {
+    filters.marketCapCategory = 'Mid Cap';
+    explanationParts.push('marketCapCategory=Mid Cap');
+  } else if (/\bsmall\s*cap\b/.test(normalized)) {
+    filters.marketCapCategory = 'Small Cap';
+    explanationParts.push('marketCapCategory=Small Cap');
+  }
+
+  const minROE = extractNumberFromPattern(query, [
+    /\broe\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*\broe\b/i,
+  ]);
+  if (minROE !== undefined) {
+    filters.minROE = minROE;
+    explanationParts.push(`minROE=${minROE}`);
+  }
+
+  const maxPE = extractNumberFromPattern(query, [
+    /\b(?:pe|p\/e)\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:\bpe\b|\bp\/e\b)/i,
+  ]);
+  if (maxPE !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxPE = maxPE;
+    explanationParts.push(`maxPE=${maxPE}`);
+  }
+
+  const maxDebt = extractNumberFromPattern(query, [
+    /\b(?:debt(?:\s*to\s*equity)?|d\/e)\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:debt|debt\s*to\s*equity|d\/e)/i,
+  ]);
+  if (maxDebt !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxDebt = maxDebt;
+    explanationParts.push(`maxDebt=${maxDebt}`);
+  }
+
+  const minDividendYield = extractNumberFromPattern(query, [
+    /\bdividend(?:\s*yield)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*dividend(?:\s*yield)?/i,
+  ]);
+  if (minDividendYield !== undefined) {
+    filters.minDividendYield = minDividendYield;
+    explanationParts.push(`minDividendYield=${minDividendYield}`);
+  }
+
+  const minSalesGrowth5yr = extractNumberFromPattern(query, [
+    /\bsales\s*growth\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*sales\s*growth/i,
+  ]);
+  if (minSalesGrowth5yr !== undefined) {
+    filters.minSalesGrowth5yr = minSalesGrowth5yr;
+    explanationParts.push(`minSalesGrowth5yr=${minSalesGrowth5yr}`);
+  }
+
+  if (/\b(low|lowest|cheap|undervalued)\b.*\b(pe|p\/e)\b|\b(pe|p\/e)\b.*\b(low|lowest|cheap|undervalued)\b/i.test(normalized)) {
+    filters.sortBy = 'stockPE';
+    filters.sortOrder = 'asc';
+  } else if (/\b(high|highest|top|best)\b.*\broe\b|\broe\b.*\b(high|highest|top|best)\b/i.test(normalized)) {
+    filters.sortBy = 'roe';
+    filters.sortOrder = 'desc';
+  } else if (/\b(high|highest|top|best)\b.*\bdividend\b|\bdividend\b.*\b(high|highest|top|best)\b/i.test(normalized)) {
+    filters.sortBy = 'dividendYield';
+    filters.sortOrder = 'desc';
+  } else if (/\b(high|highest|top|best|strong)\b.*\bsales\s*growth\b|\bsales\s*growth\b.*\b(high|highest|top|best|strong)\b/i.test(normalized)) {
+    filters.sortBy = 'salesGrowth5yr';
+    filters.sortOrder = 'desc';
+  } else {
+    filters.sortBy = 'marketCap';
+    filters.sortOrder = 'desc';
+  }
+
+  const limit = extractNumberFromPattern(query, [/\b(?:top|best|show|list)\s+(\d{1,3})\b/i]);
+  if (limit !== undefined) {
+    filters.limit = Math.max(1, Math.min(50, Math.trunc(limit)));
+  }
+
+  filters.explanation =
+    explanationParts.length > 0
+      ? `AI parser unavailable. Applied local parsing: ${explanationParts.join(', ')}.`
+      : 'AI parser unavailable. Used local keyword interpretation.';
+
+  return filters;
+}
 
 async function runFallbackSearch(query: string, explanation: string, extraTokens: string[] = []) {
   const trimmed = query.trim();
@@ -147,17 +275,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Query required' }, { status: 400 });
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noAiKey);
-    }
-
-    // Parse query with AI
+    // Parse query with AI, or local fallback parser
     let filters: Record<string, unknown>;
+    let parseFallbackExplanation: string | null = null;
     try {
-      filters = await parseScreenerQuery(query);
+      if (!process.env.OPENAI_API_KEY) {
+        parseFallbackExplanation = FALLBACK_EXPLANATIONS.noAiKey;
+        filters = parseScreenerQueryLocally(query);
+      } else {
+        filters = await parseScreenerQuery(query);
+      }
     } catch (parseError) {
       console.error('Screener parse fallback:', parseError);
-      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.parseFailed);
+      parseFallbackExplanation = FALLBACK_EXPLANATIONS.parseFailed;
+      filters = parseScreenerQueryLocally(query);
     }
 
     const {
@@ -172,6 +303,7 @@ export async function POST(req: NextRequest) {
       sortBy = 'marketCap',
       sortOrder = 'desc',
       limit = 20,
+      explanation,
     } = filters as {
       sector?: string;
       marketCapCategory?: string;
@@ -186,6 +318,24 @@ export async function POST(req: NextRequest) {
       limit?: number;
       explanation?: string;
     };
+
+    const hasStructuredFilters = Boolean(
+      sector ||
+      marketCapCategory ||
+      (minROE && minROE > 0) ||
+      (maxPE && maxPE > 0) ||
+      (maxDebtToEquity && maxDebtToEquity > 0) ||
+      (minDividendYield && minDividendYield > 0) ||
+      (minSalesGrowth5yr && minSalesGrowth5yr > 0)
+    );
+
+    if (!hasStructuredFilters) {
+      return runFallbackSearch(
+        query,
+        parseFallbackExplanation ?? FALLBACK_EXPLANATIONS.noStrictMatches,
+        keywords ?? []
+      );
+    }
 
     const where: Record<string, unknown> = {};
     if (sector) where.sector = { contains: sector };
@@ -226,7 +376,12 @@ export async function POST(req: NextRequest) {
       return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noStrictMatches, keywords ?? []);
     }
 
-    return NextResponse.json({ results, count: results.length, filters, explanation: (filters as { explanation?: string }).explanation });
+    return NextResponse.json({
+      results,
+      count: results.length,
+      filters,
+      explanation: explanation ?? parseFallbackExplanation,
+    });
   } catch (err) {
     console.error('AI Screener POST error:', err);
     return NextResponse.json({ error: 'AI screening failed' }, { status: 500 });
