@@ -79,6 +79,12 @@ function parseJsonResponse<T>(content: string): T {
   }
 }
 
+function filterStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
 type ChatOptions = {
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
   temperature: number;
@@ -341,9 +347,4 @@ Be concise, data-driven. End with risk disclaimer. No buy/sell recommendations.
     temperature: 0.3,
     max_tokens: 600,
   });
-}
-function filterStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
-    : [];
 }

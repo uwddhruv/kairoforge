@@ -8,6 +8,7 @@ const MAX_LOCAL_PARSE_QUERY_LENGTH = 300;
 const MIN_RESULT_LIMIT = 1;
 const MAX_RESULT_LIMIT = 50;
 const MIN_AI_RESULT_LIMIT = 20;
+// Avoid very short substring matches that can make relevance ranking noisy.
 const MIN_QUERY_LENGTH_FOR_PARTIAL_MATCH = 2;
 const LLM_RANK_CANDIDATE_LIMIT = 60;
 const BACKFILL_FETCH_MULTIPLIER = 2;
