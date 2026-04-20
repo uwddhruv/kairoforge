@@ -7,6 +7,7 @@ const FALLBACK_RESULT_LIMIT = 20;
 const MAX_LOCAL_PARSE_QUERY_LENGTH = 300;
 const MIN_RESULT_LIMIT = 1;
 const MAX_RESULT_LIMIT = 50;
+const MAX_DEBT_FREE_THRESHOLD = 0.1;
 const POST_VALID_SORT_FIELDS = [
   'marketCap',
   'roe',
@@ -26,7 +27,7 @@ const FALLBACK_EXPLANATIONS = {
 
 const STOP_WORDS = new Set([
   'a', 'an', 'and', 'are', 'as', 'at', 'above', 'below', 'by', 'for', 'from', 'good',
-  'in', 'into', 'is', 'like', 'of', 'on', 'or', 'stocks', 'stock', 'the', 'to', 'top', 'best',
+  'in', 'into', 'is', 'like', 'of', 'on', 'or', 'stocks', 'stock', 'the', 'to', 'top',
   'with', 'without', 'companies', 'company',
 ]);
 
@@ -110,8 +111,8 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     filters.maxDebt = maxDebt;
     explanationParts.push(`maxDebt=${maxDebt}`);
   } else if (/\bdebt[\s-]*free\b|\bzero debt\b|\bno debt\b/.test(normalized)) {
-    filters.maxDebt = 0.1;
-    explanationParts.push('maxDebt=0.1');
+    filters.maxDebt = MAX_DEBT_FREE_THRESHOLD;
+    explanationParts.push(`maxDebt=${MAX_DEBT_FREE_THRESHOLD}`);
   }
 
   const minDividendYield = extractNumberFromPattern(boundedQuery, [
@@ -133,8 +134,8 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
   }
 
   const minProfitGrowth5yr = extractNumberFromPattern(boundedQuery, [
-    /\bprofit(?:\s*(?:growth|var(?:iation)?))?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
-    /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*profit(?:\s*(?:growth|var(?:iation)?))?/i,
+    /\bprofit\s*growth\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*profit\s*growth/i,
   ]);
   if (minProfitGrowth5yr !== undefined) {
     filters.minProfitGrowth5yr = minProfitGrowth5yr;
