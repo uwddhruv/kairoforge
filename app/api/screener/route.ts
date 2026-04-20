@@ -64,7 +64,7 @@ async function runFallbackSearch(query: string, explanation: string, extraTokens
 function extractSearchTokens(query: string, maxTokens: number, extraTokens: string[] = []): string[] {
   const cleanedQueryTokens = query
     .toLowerCase()
-    .split(/[^a-z0-9&]+/i)
+    .split(/[^a-z0-9&]+/)
     .map((token) => token.trim())
     .filter((token) => token && token.length > 1 && !STOP_WORDS.has(token));
 
@@ -73,8 +73,14 @@ function extractSearchTokens(query: string, maxTokens: number, extraTokens: stri
     .filter((token) => token && token.length > 1 && !STOP_WORDS.has(token));
 
   const merged = Array.from(new Set([...cleanedExtraTokens, ...cleanedQueryTokens]));
+  const extraTokenSet = new Set(cleanedExtraTokens);
 
-  return merged.sort((a, b) => b.length - a.length).slice(0, maxTokens);
+  return merged
+    .sort((a, b) => {
+      if (b.length !== a.length) return b.length - a.length;
+      return Number(extraTokenSet.has(b)) - Number(extraTokenSet.has(a));
+    })
+    .slice(0, maxTokens);
 }
 
 export async function GET(req: NextRequest) {
