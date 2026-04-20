@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { parseScreenerQuery } from '@/lib/openai';
 
+const MAX_FALLBACK_TOKENS = 5;
+const FALLBACK_RESULT_LIMIT = 20;
+
 async function runFallbackSearch(query: string, explanation: string) {
   const trimmed = query.trim();
   if (!trimmed) {
     return NextResponse.json({ results: [], count: 0, explanation });
   }
 
-  const tokens = Array.from(new Set(trimmed.split(/\s+/).filter(Boolean))).slice(0, 5);
+  const tokens = Array.from(new Set(trimmed.split(/\s+/).filter(Boolean))).slice(0, MAX_FALLBACK_TOKENS);
   const ors = tokens.flatMap((token) => [
     { symbol: { contains: token.toUpperCase() } },
     { name: { contains: token } },
@@ -19,7 +22,7 @@ async function runFallbackSearch(query: string, explanation: string) {
   const results = await prisma.stock.findMany({
     where: ors.length > 0 ? { OR: ors } : undefined,
     orderBy: { marketCap: 'desc' },
-    take: 20,
+    take: FALLBACK_RESULT_LIMIT,
     select: {
       symbol: true,
       name: true,
