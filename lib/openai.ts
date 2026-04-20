@@ -110,7 +110,7 @@ Rules:
 - Order symbols from best match to weakest match for the query.
 - Use full query intent, including multi-constraint trade-offs.
 - Only include symbols from the candidate list.
-- Return up to ${Math.min(limit, candidates.length)} symbols.`,
+- Return exactly ${Math.min(limit, candidates.length)} symbols when at least that many candidates are available; otherwise return all candidates.`,
       },
     ],
     temperature: 0.1,
