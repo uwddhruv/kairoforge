@@ -1,5 +1,4 @@
 import OpenAI from 'openai';
-import { createHash } from 'crypto';
 
 type LlmProvider = {
   name: 'openai' | 'perplexity';
@@ -42,12 +41,10 @@ export function hasLlmProvider(): boolean {
 }
 
 function getClient(provider: LlmProvider): OpenAI {
-  const apiKeyFingerprint = createHash('sha256').update(provider.apiKey).digest('hex').slice(0, 12);
   const clientKey = [
     provider.name,
     provider.baseURL ?? 'default',
     provider.model,
-    apiKeyFingerprint,
   ].join(':');
 
   if (!providerClients.has(clientKey)) {

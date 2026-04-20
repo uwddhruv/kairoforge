@@ -8,6 +8,7 @@ const MAX_LOCAL_PARSE_QUERY_LENGTH = 300;
 const MIN_RESULT_LIMIT = 1;
 const MAX_RESULT_LIMIT = 50;
 const MIN_AI_RESULT_LIMIT = 20;
+const MIN_QUERY_LENGTH_FOR_PARTIAL_MATCH = 2;
 const LLM_RANK_CANDIDATE_LIMIT = 60;
 const BACKFILL_FETCH_MULTIPLIER = 2;
 const MAX_DEBT_FREE_THRESHOLD = 0.1;
@@ -365,8 +366,13 @@ function rankResultsByQueryRelevance(query: string, candidates: ScreenerResult[]
     else if (symbol.startsWith(queryUpper)) score += RELEVANCE_WEIGHTS.symbolPrefix;
     else if (symbol.includes(queryUpper)) score += RELEVANCE_WEIGHTS.symbolContains;
 
-    if (queryLower.length > 2 && name.includes(queryLower)) score += RELEVANCE_WEIGHTS.fullNameMatch;
-    if (queryLower.length > 2 && (sector.includes(queryLower) || industry.includes(queryLower))) {
+    if (queryLower.length > MIN_QUERY_LENGTH_FOR_PARTIAL_MATCH && name.includes(queryLower)) {
+      score += RELEVANCE_WEIGHTS.fullNameMatch;
+    }
+    if (
+      queryLower.length > MIN_QUERY_LENGTH_FOR_PARTIAL_MATCH &&
+      (sector.includes(queryLower) || industry.includes(queryLower))
+    ) {
       score += RELEVANCE_WEIGHTS.fullSectorIndustryMatch;
     }
 
