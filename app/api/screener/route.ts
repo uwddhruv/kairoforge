@@ -2,6 +2,51 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { parseScreenerQuery } from '@/lib/openai';
 
+async function runFallbackSearch(query: string, explanation: string) {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return NextResponse.json({ results: [], count: 0, explanation });
+  }
+
+  const tokens = Array.from(new Set(trimmed.split(/\s+/).filter(Boolean))).slice(0, 5);
+  const ors = tokens.flatMap((token) => [
+    { symbol: { contains: token.toUpperCase() } },
+    { name: { contains: token } },
+    { sector: { contains: token } },
+    { industry: { contains: token } },
+  ]);
+
+  const results = await prisma.stock.findMany({
+    where: ors.length > 0 ? { OR: ors } : undefined,
+    orderBy: { marketCap: 'desc' },
+    take: 20,
+    select: {
+      symbol: true,
+      name: true,
+      sector: true,
+      marketCapCategory: true,
+      currentPrice: true,
+      marketCap: true,
+      stockPE: true,
+      roe: true,
+      roce: true,
+      debtToEquity: true,
+      dividendYield: true,
+      salesGrowth5yr: true,
+      high52w: true,
+      low52w: true,
+      promoterHolding: true,
+    },
+  });
+
+  return NextResponse.json({
+    results,
+    count: results.length,
+    filters: null,
+    explanation,
+  });
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
@@ -66,8 +111,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Query required' }, { status: 400 });
     }
 
+    if (!process.env.OPENAI_API_KEY) {
+      return runFallbackSearch(query, 'Showing keyword-based results (AI parser unavailable).');
+    }
+
     // Parse query with AI
-    const filters = await parseScreenerQuery(query);
+    let filters: Record<string, unknown>;
+    try {
+      filters = await parseScreenerQuery(query);
+    } catch (parseError) {
+      console.error('Screener parse fallback:', parseError);
+      return runFallbackSearch(query, 'Showing keyword-based results (AI parser temporarily unavailable).');
+    }
+
     const {
       sector,
       marketCapCategory,
@@ -127,6 +183,10 @@ export async function POST(req: NextRequest) {
         promoterHolding: true,
       },
     });
+
+    if (results.length === 0) {
+      return runFallbackSearch(query, 'No strict AI matches found, showing closest keyword-based results.');
+    }
 
     return NextResponse.json({ results, count: results.length, filters, explanation: (filters as { explanation?: string }).explanation });
   } catch (err) {
