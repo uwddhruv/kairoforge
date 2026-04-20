@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { parseScreenerQuery } from '@/lib/openai';
 
-const MAX_FALLBACK_TOKENS = 3;
+const MAX_FALLBACK_TOKENS = 8;
 const FALLBACK_RESULT_LIMIT = 20;
 const FALLBACK_EXPLANATIONS = {
   noAiKey: 'Showing keyword-based results (AI parser unavailable).',
@@ -10,13 +10,19 @@ const FALLBACK_EXPLANATIONS = {
   noStrictMatches: 'No strict AI matches found, showing closest keyword-based results.',
 };
 
-async function runFallbackSearch(query: string, explanation: string) {
+const STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'above', 'below', 'by', 'for', 'from', 'good',
+  'in', 'into', 'is', 'like', 'of', 'on', 'or', 'stocks', 'stock', 'the', 'to', 'top',
+  'with', 'without',
+]);
+
+async function runFallbackSearch(query: string, explanation: string, extraTokens: string[] = []) {
   const trimmed = query.trim();
   if (!trimmed) {
     return NextResponse.json({ results: [], count: 0, explanation });
   }
 
-  const tokens = extractSearchTokens(trimmed, MAX_FALLBACK_TOKENS);
+  const tokens = extractSearchTokens(trimmed, MAX_FALLBACK_TOKENS, extraTokens);
   const ors = tokens.flatMap((token) => [
     { symbol: { contains: token.toUpperCase() } },
     { name: { contains: token } },
@@ -55,8 +61,20 @@ async function runFallbackSearch(query: string, explanation: string) {
   });
 }
 
-function extractSearchTokens(query: string, maxTokens: number): string[] {
-  return Array.from(new Set(query.split(/\s+/).filter(Boolean))).slice(0, maxTokens);
+function extractSearchTokens(query: string, maxTokens: number, extraTokens: string[] = []): string[] {
+  const cleanedQueryTokens = query
+    .toLowerCase()
+    .split(/[^a-z0-9&]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token && token.length > 1 && !STOP_WORDS.has(token));
+
+  const cleanedExtraTokens = extraTokens
+    .map((token) => String(token).toLowerCase().trim())
+    .filter((token) => token && token.length > 1 && !STOP_WORDS.has(token));
+
+  const merged = Array.from(new Set([...cleanedExtraTokens, ...cleanedQueryTokens]));
+
+  return merged.sort((a, b) => b.length - a.length).slice(0, maxTokens);
 }
 
 export async function GET(req: NextRequest) {
@@ -144,6 +162,7 @@ export async function POST(req: NextRequest) {
       maxDebt: maxDebtToEquity,
       minDividendYield,
       minSalesGrowth5yr,
+      keywords,
       sortBy = 'marketCap',
       sortOrder = 'desc',
       limit = 20,
@@ -155,6 +174,7 @@ export async function POST(req: NextRequest) {
       maxDebt?: number;
       minDividendYield?: number;
       minSalesGrowth5yr?: number;
+      keywords?: string[];
       sortBy?: string;
       sortOrder?: string;
       limit?: number;
@@ -197,7 +217,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (results.length === 0) {
-      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noStrictMatches);
+      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noStrictMatches, keywords ?? []);
     }
 
     return NextResponse.json({ results, count: results.length, filters, explanation: (filters as { explanation?: string }).explanation });
