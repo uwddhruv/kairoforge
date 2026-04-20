@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { createHash } from 'crypto';
 
 type LlmProvider = {
   name: 'openai' | 'perplexity';
@@ -41,11 +42,12 @@ export function hasLlmProvider(): boolean {
 }
 
 function getClient(provider: LlmProvider): OpenAI {
+  const apiKeyFingerprint = createHash('sha256').update(provider.apiKey).digest('hex').slice(0, 12);
   const clientKey = [
     provider.name,
     provider.baseURL ?? 'default',
     provider.model,
-    provider.apiKey.slice(-6),
+    apiKeyFingerprint,
   ].join(':');
 
   if (!providerClients.has(clientKey)) {
@@ -102,7 +104,7 @@ async function runChatCompletion(options: ChatOptions): Promise<string> {
         model: provider.model,
         messages: options.messages,
         temperature: options.temperature,
-        ...(typeof options.max_tokens === 'number' ? { max_tokens: options.max_tokens } : {}),
+        ...(options.max_tokens !== undefined ? { max_tokens: options.max_tokens } : {}),
         ...(options.expectJson && provider.supportsJsonResponseFormat
           ? { response_format: { type: 'json_object' as const } }
           : {}),
@@ -255,8 +257,8 @@ Return only valid JSON, no markdown.`,
   });
 
   const parsed = parseJsonResponse<Record<string, unknown>>(content);
-  const pros = Array.isArray(parsed.pros) ? parsed.pros.filter((item): item is string => typeof item === 'string') : [];
-  const cons = Array.isArray(parsed.cons) ? parsed.cons.filter((item): item is string => typeof item === 'string') : [];
+  const pros = filterStringArray(parsed.pros);
+  const cons = filterStringArray(parsed.cons);
 
   return {
     pros,
@@ -342,4 +344,9 @@ Be concise, data-driven. End with risk disclaimer. No buy/sell recommendations.
     temperature: 0.3,
     max_tokens: 600,
   });
+}
+function filterStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
 }

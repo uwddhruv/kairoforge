@@ -11,6 +11,20 @@ const MIN_AI_RESULT_LIMIT = 20;
 const LLM_RANK_CANDIDATE_LIMIT = 60;
 const BACKFILL_FETCH_MULTIPLIER = 2;
 const MAX_DEBT_FREE_THRESHOLD = 0.1;
+const RELEVANCE_WEIGHTS = {
+  exactSymbol: 120,
+  symbolPrefix: 80,
+  symbolContains: 50,
+  fullNameMatch: 70,
+  fullSectorIndustryMatch: 45,
+  tokenExactSymbol: 60,
+  tokenSymbolPrefix: 30,
+  tokenSymbolContains: 20,
+  tokenName: 18,
+  tokenSector: 16,
+  tokenIndustry: 16,
+  tokenCapCategory: 10,
+} as const;
 const VALID_SORT_FIELDS = [
   'marketCap',
   'roe',
@@ -347,23 +361,25 @@ function rankResultsByQueryRelevance(query: string, candidates: ScreenerResult[]
     const industry = (candidate.industry ?? '').toLowerCase();
     const capCategory = (candidate.marketCapCategory ?? '').toLowerCase();
 
-    if (symbol === queryUpper) score += 120;
-    else if (symbol.startsWith(queryUpper)) score += 80;
-    else if (symbol.includes(queryUpper)) score += 50;
+    if (symbol === queryUpper) score += RELEVANCE_WEIGHTS.exactSymbol;
+    else if (symbol.startsWith(queryUpper)) score += RELEVANCE_WEIGHTS.symbolPrefix;
+    else if (symbol.includes(queryUpper)) score += RELEVANCE_WEIGHTS.symbolContains;
 
-    if (queryLower.length > 2 && name.includes(queryLower)) score += 70;
-    if (queryLower.length > 2 && (sector.includes(queryLower) || industry.includes(queryLower))) score += 45;
+    if (queryLower.length > 2 && name.includes(queryLower)) score += RELEVANCE_WEIGHTS.fullNameMatch;
+    if (queryLower.length > 2 && (sector.includes(queryLower) || industry.includes(queryLower))) {
+      score += RELEVANCE_WEIGHTS.fullSectorIndustryMatch;
+    }
 
     for (const token of tokens) {
       const tokenUpper = token.toUpperCase();
-      if (symbol === tokenUpper) score += 60;
-      else if (symbol.startsWith(tokenUpper)) score += 30;
-      else if (symbol.includes(tokenUpper)) score += 20;
+      if (symbol === tokenUpper) score += RELEVANCE_WEIGHTS.tokenExactSymbol;
+      else if (symbol.startsWith(tokenUpper)) score += RELEVANCE_WEIGHTS.tokenSymbolPrefix;
+      else if (symbol.includes(tokenUpper)) score += RELEVANCE_WEIGHTS.tokenSymbolContains;
 
-      if (name.includes(token)) score += 18;
-      if (sector.includes(token)) score += 16;
-      if (industry.includes(token)) score += 16;
-      if (capCategory.includes(token)) score += 10;
+      if (name.includes(token)) score += RELEVANCE_WEIGHTS.tokenName;
+      if (sector.includes(token)) score += RELEVANCE_WEIGHTS.tokenSector;
+      if (industry.includes(token)) score += RELEVANCE_WEIGHTS.tokenIndustry;
+      if (capCategory.includes(token)) score += RELEVANCE_WEIGHTS.tokenCapCategory;
     }
 
     return { candidate, index, score };
