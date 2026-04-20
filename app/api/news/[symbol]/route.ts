@@ -12,6 +12,11 @@ interface NewsArticle {
   source?: { name: string };
 }
 
+function isValidArticle(article: Partial<NewsArticle>): article is NewsArticle {
+  if (!article.title || !article.url || !article.publishedAt) return false;
+  return !Number.isNaN(Date.parse(article.publishedAt));
+}
+
 async function fetchGNewsHeadlines(symbol: string, companyName: string) {
   const apiKey = process.env.GNEWS_API_KEY;
   if (!apiKey) return [];
@@ -48,7 +53,7 @@ async function fetchGoogleNewsRssHeadlines(symbol: string, companyName: string):
     const xml = response.data;
 
     const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
-    return items.slice(0, 6).map((item) => {
+    return items.slice(0, 6).map((item): Partial<NewsArticle> => {
       const title = cleanRssText(item.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? '');
       const link = cleanRssText(item.match(/<link>([\s\S]*?)<\/link>/)?.[1] ?? '');
       const description = cleanRssText(item.match(/<description>([\s\S]*?)<\/description>/)?.[1] ?? '');
@@ -59,10 +64,10 @@ async function fetchGoogleNewsRssHeadlines(symbol: string, companyName: string):
         title,
         description: description || undefined,
         url: link,
-        publishedAt: publishedAtRaw ? new Date(publishedAtRaw).toISOString() : new Date().toISOString(),
+        publishedAt: publishedAtRaw ? new Date(publishedAtRaw).toISOString() : '',
         source: sourceName ? { name: sourceName } : undefined,
       };
-    }).filter(article => article.title && article.url);
+    }).filter(isValidArticle);
   } catch {
     return [];
   }
