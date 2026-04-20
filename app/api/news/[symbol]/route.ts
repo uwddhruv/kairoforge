@@ -40,7 +40,8 @@ async function fetchGNewsHeadlines(symbol: string, companyName: string) {
 
 function cleanRssText(text: string) {
   return text
-    .replace(/^<!\[CDATA\[|\]\]>$/g, '')
+    .replace(/^<!\[CDATA\[/, '')
+    .replace(/\]\]>$/, '')
     .replace(/<[^>]*>/g, '')
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
@@ -58,21 +59,31 @@ async function fetchGoogleNewsRssHeadlines(symbol: string, companyName: string):
     const xml = response.data;
 
     const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
-    return items.map((item) => {
+    const articles: NewsArticle[] = [];
+
+    for (const item of items) {
+      if (articles.length >= MAX_NEWS_ARTICLES) break;
+
       const title = cleanRssText(item.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? '');
       const url = cleanRssText(item.match(/<link>([\s\S]*?)<\/link>/)?.[1] ?? '');
       const description = cleanRssText(item.match(/<description>([\s\S]*?)<\/description>/)?.[1] ?? '');
       const publishedAtRaw = cleanRssText(item.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1] ?? '');
       const sourceName = cleanRssText(item.match(/<source[^>]*>([\s\S]*?)<\/source>/)?.[1] ?? '');
 
-      return {
+      const candidate = {
         title,
         description: description || undefined,
         url,
         publishedAt: publishedAtRaw,
         source: sourceName ? { name: sourceName } : undefined,
       };
-    }).filter(isValidArticle).slice(0, MAX_NEWS_ARTICLES);
+
+      if (isValidArticle(candidate)) {
+        articles.push(candidate);
+      }
+    }
+
+    return articles;
   } catch {
     return [];
   }
