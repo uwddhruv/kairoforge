@@ -13,8 +13,12 @@ interface NewsArticle {
 }
 
 function isValidArticle(article: Partial<NewsArticle>): article is NewsArticle {
-  if (!article.title || !article.url || !article.publishedAt) return false;
-  return !Number.isNaN(Date.parse(article.publishedAt));
+  const title = article.title?.trim();
+  const url = article.url?.trim();
+  const publishedAt = article.publishedAt?.trim();
+
+  if (!title || !url || !publishedAt) return false;
+  return !Number.isNaN(Date.parse(publishedAt));
 }
 
 async function fetchGNewsHeadlines(symbol: string, companyName: string) {
@@ -64,7 +68,7 @@ async function fetchGoogleNewsRssHeadlines(symbol: string, companyName: string):
         title,
         description: description || undefined,
         url: link,
-        publishedAt: publishedAtRaw ? new Date(publishedAtRaw).toISOString() : '',
+        publishedAt: publishedAtRaw,
         source: sourceName ? { name: sourceName } : undefined,
       };
     }).filter(isValidArticle);
