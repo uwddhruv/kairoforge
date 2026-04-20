@@ -8,7 +8,7 @@ const MAX_LOCAL_PARSE_QUERY_LENGTH = 300;
 const MIN_RESULT_LIMIT = 1;
 const MAX_RESULT_LIMIT = 50;
 const MAX_DEBT_FREE_THRESHOLD = 0.1;
-const POST_VALID_SORT_FIELDS = [
+const VALID_SORT_FIELDS = [
   'marketCap',
   'roe',
   'roce',
@@ -429,7 +429,7 @@ export async function POST(req: NextRequest) {
       'p/b': 'pbRatio',
     };
     const normalizedSortBy = sortAliasMap[String(sortBy).toLowerCase()] ?? sortBy;
-    const orderByField = POST_VALID_SORT_FIELDS.includes(normalizedSortBy as (typeof POST_VALID_SORT_FIELDS)[number])
+    const orderByField = VALID_SORT_FIELDS.includes(normalizedSortBy as (typeof VALID_SORT_FIELDS)[number])
       ? normalizedSortBy as string
       : 'marketCap';
 
