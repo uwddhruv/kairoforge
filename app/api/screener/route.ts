@@ -8,15 +8,15 @@ const MAX_LOCAL_PARSE_QUERY_LENGTH = 300;
 const MIN_RESULT_LIMIT = 1;
 const MAX_RESULT_LIMIT = 50;
 const FALLBACK_EXPLANATIONS = {
-  noAiKey: 'AI parser unavailable, using local prompt parsing.',
-  parseFailed: 'AI parser temporarily unavailable, using local prompt parsing.',
-  noStrictMatches: 'No strict AI matches found, showing closest keyword-based results.',
+  noAiKey: 'Using local prompt parser.',
+  parseFailed: 'AI parsing failed, using local prompt parser.',
+  noStrictMatches: 'No strict matches found, showing closest keyword-based results.',
 };
 
 const STOP_WORDS = new Set([
   'a', 'an', 'and', 'are', 'as', 'at', 'above', 'below', 'by', 'for', 'from', 'good',
-  'in', 'into', 'is', 'like', 'of', 'on', 'or', 'stocks', 'stock', 'the', 'to', 'top',
-  'with', 'without',
+  'in', 'into', 'is', 'like', 'of', 'on', 'or', 'stocks', 'stock', 'the', 'to', 'top', 'best',
+  'with', 'without', 'companies', 'company',
 ]);
 
 const SECTOR_MATCHERS: Array<{ sector: string; keywords: string[] }> = [
@@ -98,6 +98,9 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
   if (maxDebt !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
     filters.maxDebt = maxDebt;
     explanationParts.push(`maxDebt=${maxDebt}`);
+  } else if (/\bdebt[\s-]*free\b|\bzero debt\b|\bno debt\b/.test(normalized)) {
+    filters.maxDebt = 0.1;
+    explanationParts.push('maxDebt=0.1');
   }
 
   const minDividendYield = extractNumberFromPattern(boundedQuery, [
@@ -118,15 +121,56 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     explanationParts.push(`minSalesGrowth5yr=${minSalesGrowth5yr}`);
   }
 
+  const minProfitGrowth5yr = extractNumberFromPattern(boundedQuery, [
+    /\bprofit(?:\s*(?:growth|var(?:iation)?))?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*profit(?:\s*(?:growth|var(?:iation)?))?/i,
+  ]);
+  if (minProfitGrowth5yr !== undefined) {
+    filters.minProfitGrowth5yr = minProfitGrowth5yr;
+    explanationParts.push(`minProfitGrowth5yr=${minProfitGrowth5yr}`);
+  }
+
+  const minROCE = extractNumberFromPattern(boundedQuery, [
+    /\broce\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*\broce\b/i,
+  ]);
+  if (minROCE !== undefined) {
+    filters.minROCE = minROCE;
+    explanationParts.push(`minROCE=${minROCE}`);
+  }
+
+  const maxPB = extractNumberFromPattern(boundedQuery, [
+    /\b(?:pb|p\/b|price\s*to\s*book)\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:\bpb\b|\bp\/b\b|price\s*to\s*book)/i,
+  ]);
+  if (maxPB !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxPB = maxPB;
+    explanationParts.push(`maxPB=${maxPB}`);
+  }
+
+  const minPiotroskiScore = extractNumberFromPattern(boundedQuery, [
+    /\bpiotroski(?:\s*score)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+  ]);
+  if (minPiotroskiScore !== undefined) {
+    filters.minPiotroskiScore = minPiotroskiScore;
+    explanationParts.push(`minPiotroskiScore=${minPiotroskiScore}`);
+  }
+
   if (/\b(low|lowest|cheap|undervalued)\b.*\b(pe|p\/e)\b|\b(pe|p\/e)\b.*\b(low|lowest|cheap|undervalued)\b/i.test(normalized)) {
     filters.sortBy = 'stockPE';
     filters.sortOrder = 'asc';
   } else if (/\b(high|highest|top|best)\b.*\broe\b|\broe\b.*\b(high|highest|top|best)\b/i.test(normalized)) {
     filters.sortBy = 'roe';
     filters.sortOrder = 'desc';
+  } else if (/\b(high|highest|top|best)\b.*\broce\b|\broce\b.*\b(high|highest|top|best)\b/i.test(normalized)) {
+    filters.sortBy = 'roce';
+    filters.sortOrder = 'desc';
   } else if (/\b(high|highest|top|best)\b.*\bdividend\b|\bdividend\b.*\b(high|highest|top|best)\b/i.test(normalized)) {
     filters.sortBy = 'dividendYield';
     filters.sortOrder = 'desc';
+  } else if (/\b(low|lowest|cheap|undervalued)\b.*\b(pb|p\/b)\b|\b(pb|p\/b)\b.*\b(low|lowest|cheap|undervalued)\b/i.test(normalized)) {
+    filters.sortBy = 'pbRatio';
+    filters.sortOrder = 'asc';
   } else if (/\b(high|highest|top|best|strong)\b.*\bsales\s*growth\b|\bsales\s*growth\b.*\b(high|highest|top|best|strong)\b/i.test(normalized)) {
     filters.sortBy = 'salesGrowth5yr';
     filters.sortOrder = 'desc';
@@ -142,8 +186,8 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
 
   filters.explanation =
     explanationParts.length > 0
-      ? `AI parser unavailable. Applied local parsing: ${explanationParts.join(', ')}.`
-      : 'AI parser unavailable. Used local keyword interpretation.';
+      ? `Applied local parsing: ${explanationParts.join(', ')}.`
+      : 'Used local keyword interpretation.';
 
   return filters;
 }
@@ -299,10 +343,14 @@ export async function POST(req: NextRequest) {
       sector,
       marketCapCategory,
       minROE,
+      minROCE,
       maxPE,
+      maxPB,
       maxDebt: maxDebtToEquity,
       minDividendYield,
       minSalesGrowth5yr,
+      minProfitGrowth5yr,
+      minPiotroskiScore,
       keywords,
       sortBy = 'marketCap',
       sortOrder = 'desc',
@@ -312,10 +360,14 @@ export async function POST(req: NextRequest) {
       sector?: string;
       marketCapCategory?: string;
       minROE?: number;
+      minROCE?: number;
       maxPE?: number;
+      maxPB?: number;
       maxDebt?: number;
       minDividendYield?: number;
       minSalesGrowth5yr?: number;
+      minProfitGrowth5yr?: number;
+      minPiotroskiScore?: number;
       keywords?: string[];
       sortBy?: string;
       sortOrder?: string;
@@ -327,10 +379,14 @@ export async function POST(req: NextRequest) {
       sector ||
       marketCapCategory ||
       (typeof minROE === 'number' && minROE > 0) ||
+      (typeof minROCE === 'number' && minROCE > 0) ||
       (typeof maxPE === 'number' && maxPE > 0) ||
+      (typeof maxPB === 'number' && maxPB > 0) ||
       (typeof maxDebtToEquity === 'number' && maxDebtToEquity > 0) ||
       (typeof minDividendYield === 'number' && minDividendYield > 0) ||
-      (typeof minSalesGrowth5yr === 'number' && minSalesGrowth5yr > 0)
+      (typeof minSalesGrowth5yr === 'number' && minSalesGrowth5yr > 0) ||
+      (typeof minProfitGrowth5yr === 'number' && minProfitGrowth5yr > 0) ||
+      (typeof minPiotroskiScore === 'number' && minPiotroskiScore > 0)
     );
 
     if (!hasStructuredFilters) {
@@ -345,13 +401,18 @@ export async function POST(req: NextRequest) {
     if (sector) where.sector = { contains: sector };
     if (marketCapCategory) where.marketCapCategory = marketCapCategory;
     if (minROE && minROE > 0) where.roe = { gte: minROE };
+    if (minROCE && minROCE > 0) where.roce = { gte: minROCE };
     if (maxPE && maxPE > 0) where.stockPE = { lte: maxPE, gt: 0 };
+    if (maxPB && maxPB > 0) where.pbRatio = { lte: maxPB, gt: 0 };
     if (maxDebtToEquity && maxDebtToEquity > 0) where.debtToEquity = { lte: maxDebtToEquity };
     if (minDividendYield && minDividendYield > 0) where.dividendYield = { gte: minDividendYield };
     if (minSalesGrowth5yr && minSalesGrowth5yr > 0) where.salesGrowth5yr = { gte: minSalesGrowth5yr };
+    if (minProfitGrowth5yr && minProfitGrowth5yr > 0) where.profitVar5yr = { gte: minProfitGrowth5yr };
+    if (minPiotroskiScore && minPiotroskiScore > 0) where.piotroskiScore = { gte: minPiotroskiScore };
 
-    const validSortFields = ['marketCap', 'roe', 'roce', 'stockPE', 'dividendYield', 'salesGrowth5yr'];
-    const orderByField = validSortFields.includes(sortBy as string) ? sortBy as string : 'marketCap';
+    const normalizedSortBy = String(sortBy).toLowerCase() === 'pe' ? 'stockPE' : sortBy;
+    const validSortFields = ['marketCap', 'roe', 'roce', 'stockPE', 'pbRatio', 'dividendYield', 'salesGrowth5yr', 'profitVar5yr', 'piotroskiScore'];
+    const orderByField = validSortFields.includes(normalizedSortBy as string) ? normalizedSortBy as string : 'marketCap';
 
     const results = await prisma.stock.findMany({
       where,
