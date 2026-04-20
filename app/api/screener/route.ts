@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { parseScreenerQuery } from '@/lib/openai';
+import { parseScreenerQuery, rankScreenerCandidates } from '@/lib/openai';
 
 const MAX_FALLBACK_TOKENS = 8;
 const FALLBACK_RESULT_LIMIT = 20;
 const MAX_LOCAL_PARSE_QUERY_LENGTH = 300;
 const MIN_RESULT_LIMIT = 1;
 const MAX_RESULT_LIMIT = 50;
+const MIN_AI_RESULT_LIMIT = 20;
+const LLM_RANK_CANDIDATE_LIMIT = 60;
+const BACKFILL_FETCH_MULTIPLIER = 2;
 const MAX_DEBT_FREE_THRESHOLD = 0.1;
 const VALID_SORT_FIELDS = [
   'marketCap',
@@ -218,7 +221,7 @@ async function runFallbackSearch(query: string, explanation: string, extraTokens
     { industry: { contains: token } },
   ]);
 
-  const results = await prisma.stock.findMany({
+  const fallbackRaw = await prisma.stock.findMany({
     where: ors.length > 0 ? { OR: ors } : undefined,
     orderBy: { marketCap: 'desc' },
     take: FALLBACK_RESULT_LIMIT,
@@ -241,12 +244,99 @@ async function runFallbackSearch(query: string, explanation: string, extraTokens
     },
   });
 
+  const results = await maybeRankResultsWithLLM(query, fallbackRaw, FALLBACK_RESULT_LIMIT);
+
   return NextResponse.json({
     results,
     count: results.length,
     filters: null,
     explanation,
   });
+}
+
+type ScreenerResult = {
+  symbol: string;
+  name: string;
+  sector: string;
+  marketCapCategory: string;
+  currentPrice: number;
+  marketCap: number;
+  stockPE: number;
+  roe: number;
+  roce: number;
+  debtToEquity: number;
+  dividendYield: number;
+  salesGrowth5yr: number;
+  high52w: number;
+  low52w: number;
+  promoterHolding: number;
+  industry?: string;
+  pbRatio?: number;
+  profitVar5yr?: number;
+  piotroskiScore?: number;
+};
+
+async function maybeRankResultsWithLLM(
+  query: string,
+  candidates: ScreenerResult[],
+  limit: number
+): Promise<ScreenerResult[]> {
+  if (!process.env.OPENAI_API_KEY || candidates.length === 0) {
+    return candidates.slice(0, limit);
+  }
+
+  try {
+    // Keep token usage and latency bounded while still allowing broad reranking.
+    // We cap the candidate pool that gets sent to the LLM and preserve deterministic fallback ordering for the rest.
+    const rankingSymbols = await rankScreenerCandidates(
+      query,
+      candidates.slice(0, LLM_RANK_CANDIDATE_LIMIT).map((candidate) => ({
+        symbol: candidate.symbol,
+        name: candidate.name,
+        sector: candidate.sector,
+        industry: candidate.industry,
+        marketCapCategory: candidate.marketCapCategory,
+        marketCap: candidate.marketCap,
+        stockPE: candidate.stockPE,
+        pbRatio: candidate.pbRatio,
+        roe: candidate.roe,
+        roce: candidate.roce,
+        debtToEquity: candidate.debtToEquity,
+        dividendYield: candidate.dividendYield,
+        salesGrowth5yr: candidate.salesGrowth5yr,
+        profitVar5yr: candidate.profitVar5yr,
+        piotroskiScore: candidate.piotroskiScore,
+      })),
+      limit
+    );
+
+    const bySymbol = new Map(candidates.map((candidate) => [candidate.symbol, candidate]));
+    const ranked = rankingSymbols
+      .map((symbol) => bySymbol.get(symbol))
+      .filter((candidate): candidate is ScreenerResult => Boolean(candidate));
+
+    const rankedSymbols = new Set(ranked.map((candidate) => candidate.symbol));
+    const remaining = candidates.filter((candidate) => !rankedSymbols.has(candidate.symbol));
+
+    return [...ranked, ...remaining].slice(0, limit);
+  } catch (error) {
+    console.error('LLM ranking failed, returning default order:', error);
+    return candidates.slice(0, limit);
+  }
+}
+
+function appendUniqueStocks(
+  target: ScreenerResult[],
+  incoming: ScreenerResult[],
+  seenSymbols: Set<string>,
+  maxLength: number
+) {
+  for (const stock of incoming) {
+    if (seenSymbols.has(stock.symbol)) continue;
+    seenSymbols.add(stock.symbol);
+    target.push(stock);
+    if (target.length >= maxLength) break;
+  }
 }
 
 function extractSearchTokens(query: string, maxTokens: number, extraTokens: string[] = []): string[] {
@@ -366,7 +456,7 @@ export async function POST(req: NextRequest) {
       keywords,
       sortBy = 'marketCap',
       sortOrder = 'desc',
-      limit = 20,
+      limit = MIN_AI_RESULT_LIMIT,
       explanation,
     } = filters as {
       sector?: string;
@@ -433,32 +523,121 @@ export async function POST(req: NextRequest) {
       ? normalizedSortBy as string
       : 'marketCap';
 
-    const results = await prisma.stock.findMany({
+    const parsedLimit = Number(limit);
+    const requestedLimit = Number.isFinite(parsedLimit)
+      ? Math.max(MIN_AI_RESULT_LIMIT, Math.min(MAX_RESULT_LIMIT, Math.round(parsedLimit)))
+      : MIN_AI_RESULT_LIMIT;
+
+    const strictResults = await prisma.stock.findMany({
       where,
       orderBy: { [orderByField]: (sortOrder as 'asc' | 'desc') ?? 'desc' },
-      take: Math.min((limit as number) ?? 20, 50),
+      take: requestedLimit,
       select: {
         symbol: true,
         name: true,
         sector: true,
+        industry: true,
         marketCapCategory: true,
         currentPrice: true,
         marketCap: true,
         stockPE: true,
+        pbRatio: true,
         roe: true,
         roce: true,
         debtToEquity: true,
         dividendYield: true,
         salesGrowth5yr: true,
+        profitVar5yr: true,
+        piotroskiScore: true,
         high52w: true,
         low52w: true,
         promoterHolding: true,
       },
     });
 
-    if (results.length === 0) {
+    if (strictResults.length === 0) {
       return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noStrictMatches, keywords ?? []);
     }
+
+    const seenSymbols = new Set(strictResults.map((stock) => stock.symbol));
+    let combinedResults = [...strictResults];
+
+    if (combinedResults.length < requestedLimit) {
+      const extraTokens = extractSearchTokens(query, MAX_FALLBACK_TOKENS, keywords ?? []);
+      const ors = extraTokens.flatMap((token) => [
+        { symbol: { contains: token.toUpperCase() } },
+        { name: { contains: token } },
+        { sector: { contains: token } },
+        { industry: { contains: token } },
+      ]);
+
+      const remainingSlots = requestedLimit - combinedResults.length;
+      const backfillResults = await prisma.stock.findMany({
+        where: {
+          symbol: { notIn: Array.from(seenSymbols) },
+          OR: ors.length > 0 ? ors : undefined,
+        },
+        orderBy: { marketCap: 'desc' },
+        take: Math.max(remainingSlots, remainingSlots * BACKFILL_FETCH_MULTIPLIER),
+        select: {
+          symbol: true,
+          name: true,
+          sector: true,
+          industry: true,
+          marketCapCategory: true,
+          currentPrice: true,
+          marketCap: true,
+          stockPE: true,
+          pbRatio: true,
+          roe: true,
+          roce: true,
+          debtToEquity: true,
+          dividendYield: true,
+          salesGrowth5yr: true,
+          profitVar5yr: true,
+          piotroskiScore: true,
+          high52w: true,
+          low52w: true,
+          promoterHolding: true,
+        },
+      });
+
+      appendUniqueStocks(combinedResults, backfillResults, seenSymbols, requestedLimit);
+    }
+
+    if (combinedResults.length < requestedLimit) {
+      const remainingSlots = requestedLimit - combinedResults.length;
+      const marketCapFill = await prisma.stock.findMany({
+        where: { symbol: { notIn: Array.from(seenSymbols) } },
+        orderBy: { marketCap: 'desc' },
+        take: remainingSlots,
+        select: {
+          symbol: true,
+          name: true,
+          sector: true,
+          industry: true,
+          marketCapCategory: true,
+          currentPrice: true,
+          marketCap: true,
+          stockPE: true,
+          pbRatio: true,
+          roe: true,
+          roce: true,
+          debtToEquity: true,
+          dividendYield: true,
+          salesGrowth5yr: true,
+          profitVar5yr: true,
+          piotroskiScore: true,
+          high52w: true,
+          low52w: true,
+          promoterHolding: true,
+        },
+      });
+
+      appendUniqueStocks(combinedResults, marketCapFill, seenSymbols, requestedLimit);
+    }
+
+    const results = await maybeRankResultsWithLLM(query, combinedResults, requestedLimit);
 
     return NextResponse.json({
       results,

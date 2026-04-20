@@ -62,6 +62,67 @@ Return only valid JSON, no markdown.`,
   return JSON.parse(content);
 }
 
+interface ScreenerCandidate {
+  symbol: string;
+  name: string;
+  sector: string;
+  industry?: string;
+  marketCapCategory: string;
+  marketCap: number;
+  stockPE: number;
+  pbRatio?: number;
+  roe: number;
+  roce: number;
+  debtToEquity: number;
+  dividendYield: number;
+  salesGrowth5yr: number;
+  profitVar5yr?: number;
+  piotroskiScore?: number;
+}
+
+/** Rank screener candidates for a natural-language query using an LLM */
+export async function rankScreenerCandidates(
+  query: string,
+  candidates: ScreenerCandidate[],
+  limit: number
+): Promise<string[]> {
+  if (candidates.length === 0 || limit <= 0) return [];
+
+  const openai = getOpenAI();
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `Rank these Indian stocks for the user's screener requirement.
+Query: "${query}"
+
+Candidates:
+${JSON.stringify(candidates)}
+
+Return only valid JSON in this exact shape:
+{
+  "symbols": ["SYMBOL_1", "SYMBOL_2", "..."]
+}
+
+Rules:
+- Order symbols from best match to weakest match for the query.
+- Use full query intent, including multi-constraint trade-offs.
+- Only include symbols from the candidate list.
+- Return exactly ${Math.min(limit, candidates.length)} symbols when at least that many candidates are available; otherwise return all candidates.`,
+      },
+    ],
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+  });
+
+  const content = response.choices[0].message.content ?? '{}';
+  const parsed = JSON.parse(content) as { symbols?: unknown };
+  const rankedSymbols = Array.isArray(parsed.symbols) ? parsed.symbols : [];
+  return rankedSymbols.filter((value): value is string => typeof value === 'string');
+}
+
 /** Generate AI analysis for a stock */
 export async function generateStockAnalysis(
   symbol: string,
