@@ -38,7 +38,7 @@ async function fetchGNewsHeadlines(symbol: string, companyName: string) {
   }
 }
 
-function cleanRssText(text: string) {
+function cleanRssText(text: string): string {
   return text
     .replace(/^<!\[CDATA\[/, '')
     .replace(/\]\]>$/, '')
