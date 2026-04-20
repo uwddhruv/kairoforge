@@ -134,7 +134,7 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
   }
 
   const minProfitGrowth5yr = extractNumberFromPattern(boundedQuery, [
-    /\bprofit\s*growth\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /\bprofit\s*growth\b[^\d%]{0,20}(\d+(?:\.\d+)?)\s*%?/i,
     /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*profit\s*growth/i,
   ]);
   if (minProfitGrowth5yr !== undefined) {
@@ -424,6 +424,7 @@ export async function POST(req: NextRequest) {
 
     const sortAliasMap: Record<string, string> = {
       pe: 'stockPE',
+      'p/e': 'stockPE',
       pb: 'pbRatio',
       'p/b': 'pbRatio',
     };
