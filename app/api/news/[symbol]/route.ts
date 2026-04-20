@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import axios from 'axios';
 
 const NEWS_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_NEWS_ARTICLES = 6;
 
 interface NewsArticle {
   title: string;
@@ -28,7 +29,7 @@ async function fetchGNewsHeadlines(symbol: string, companyName: string) {
   try {
     const query = encodeURIComponent(`${companyName} ${symbol} NSE`);
     const response = await axios.get(
-      `https://gnews.io/api/v4/search?q=${query}&lang=en&country=in&max=6&token=${apiKey}`,
+      `https://gnews.io/api/v4/search?q=${query}&lang=en&country=in&max=${MAX_NEWS_ARTICLES}&token=${apiKey}`,
       { timeout: 5000 }
     );
     return response.data.articles ?? [];
@@ -57,7 +58,7 @@ async function fetchGoogleNewsRssHeadlines(symbol: string, companyName: string):
     const xml = response.data;
 
     const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
-    return items.slice(0, 6).map((item): Partial<NewsArticle> => {
+    return items.slice(0, MAX_NEWS_ARTICLES).map((item): Partial<NewsArticle> => {
       const title = cleanRssText(item.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? '');
       const link = cleanRssText(item.match(/<link>([\s\S]*?)<\/link>/)?.[1] ?? '');
       const description = cleanRssText(item.match(/<description>([\s\S]*?)<\/description>/)?.[1] ?? '');
