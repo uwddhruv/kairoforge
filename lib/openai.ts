@@ -151,6 +151,7 @@ Return a JSON object with any of these optional fields:
   "minROE": number (percentage) or null,
   "minROCE": number (percentage) or null,
   "maxDebt": number or null,
+  "priceBelowGraham": boolean or null,
   "minDividendYield": number (percentage) or null,
   "minSalesGrowth5yr": number (percentage) or null,
   "minProfitGrowth5yr": number (percentage) or null,

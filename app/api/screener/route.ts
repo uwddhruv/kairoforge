@@ -3,11 +3,11 @@ import prisma from '@/lib/prisma';
 import { hasLlmProvider, parseScreenerQuery, rankScreenerCandidates } from '@/lib/openai';
 
 const MAX_FALLBACK_TOKENS = 8;
-const FALLBACK_RESULT_LIMIT = 20;
+const DEFAULT_RESULT_LIMIT = 1000;
+const FALLBACK_RESULT_LIMIT = DEFAULT_RESULT_LIMIT;
 const MAX_LOCAL_PARSE_QUERY_LENGTH = 300;
 const MIN_RESULT_LIMIT = 1;
-const MAX_RESULT_LIMIT = 50;
-const MIN_AI_RESULT_LIMIT = 20;
+const MAX_RESULT_LIMIT = 1500;
 // Avoid very short substring matches that can make relevance ranking noisy.
 const MIN_QUERY_LENGTH_FOR_PARTIAL_MATCH = 2;
 const LLM_RANK_CANDIDATE_LIMIT = 60;
@@ -187,6 +187,15 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     explanationParts.push(`minPiotroskiScore=${minPiotroskiScore}`);
   }
 
+  if (
+    /\b(?:price|cmp|current\s*price)\b.*(?:below|under|less than|lower than|<).*?\bgraham(?:\s*number)?\b|\bgraham(?:\s*number)?\b.*(?:above|greater than|higher than|>)\s*\b(?:price|cmp|current\s*price)\b/i.test(
+      normalized
+    )
+  ) {
+    filters.priceBelowGraham = true;
+    explanationParts.push('priceBelowGraham=true');
+  }
+
   if (/\b(low|lowest|cheap|undervalued)\b.*\b(pe|p\/e)\b|\b(pe|p\/e)\b.*\b(low|lowest|cheap|undervalued)\b/i.test(normalized)) {
     filters.sortBy = 'stockPE';
     filters.sortOrder = 'asc';
@@ -210,7 +219,7 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     filters.sortOrder = 'desc';
   }
 
-  const limit = extractNumberFromPattern(boundedQuery, [/\b(?:top|best|show|list)\s+(\d{1,3})\b/i]);
+  const limit = extractNumberFromPattern(boundedQuery, [/\b(?:top|best|show|list)\s+(\d{1,4})\b/i]);
   if (limit !== undefined) {
     filters.limit = Math.max(MIN_RESULT_LIMIT, Math.min(MAX_RESULT_LIMIT, Math.trunc(limit)));
   }
@@ -286,6 +295,7 @@ type ScreenerResult = {
   high52w: number;
   low52w: number;
   promoterHolding: number;
+  grahamNumber?: number;
   industry?: string;
   pbRatio?: number;
   profitVar5yr?: number;
@@ -466,7 +476,7 @@ export async function GET(req: NextRequest) {
     const results = await prisma.stock.findMany({
       where,
       orderBy: { [orderByField]: sortOrder },
-      take: Math.min(limit, 100),
+      take: Math.min(limit, MAX_RESULT_LIMIT),
       select: {
         symbol: true,
         name: true,
@@ -528,10 +538,11 @@ export async function POST(req: NextRequest) {
       minSalesGrowth5yr,
       minProfitGrowth5yr,
       minPiotroskiScore,
+      priceBelowGraham,
       keywords,
       sortBy = 'marketCap',
       sortOrder = 'desc',
-      limit = MIN_AI_RESULT_LIMIT,
+      limit = DEFAULT_RESULT_LIMIT,
       explanation,
     } = filters as {
       sector?: string;
@@ -545,6 +556,7 @@ export async function POST(req: NextRequest) {
       minSalesGrowth5yr?: number;
       minProfitGrowth5yr?: number;
       minPiotroskiScore?: number;
+      priceBelowGraham?: boolean;
       keywords?: string[];
       sortBy?: string;
       sortOrder?: string;
@@ -563,7 +575,8 @@ export async function POST(req: NextRequest) {
       (typeof minDividendYield === 'number' && minDividendYield > 0) ||
       (typeof minSalesGrowth5yr === 'number' && minSalesGrowth5yr > 0) ||
       (typeof minProfitGrowth5yr === 'number' && minProfitGrowth5yr > 0) ||
-      (typeof minPiotroskiScore === 'number' && minPiotroskiScore > 0)
+      (typeof minPiotroskiScore === 'number' && minPiotroskiScore > 0) ||
+      priceBelowGraham === true
     );
 
     if (!hasStructuredFilters) {
@@ -600,13 +613,17 @@ export async function POST(req: NextRequest) {
 
     const parsedLimit = Number(limit);
     const requestedLimit = Number.isFinite(parsedLimit)
-      ? Math.max(MIN_AI_RESULT_LIMIT, Math.min(MAX_RESULT_LIMIT, Math.round(parsedLimit)))
-      : MIN_AI_RESULT_LIMIT;
+      ? Math.max(MIN_RESULT_LIMIT, Math.min(MAX_RESULT_LIMIT, Math.round(parsedLimit)))
+      : DEFAULT_RESULT_LIMIT;
+
+    const strictTake = priceBelowGraham
+      ? Math.min(MAX_RESULT_LIMIT, Math.max(requestedLimit, requestedLimit * BACKFILL_FETCH_MULTIPLIER))
+      : requestedLimit;
 
     const strictResults = await prisma.stock.findMany({
       where,
       orderBy: { [orderByField]: (sortOrder as 'asc' | 'desc') ?? 'desc' },
-      take: requestedLimit,
+      take: strictTake,
       select: {
         symbol: true,
         name: true,
@@ -627,15 +644,20 @@ export async function POST(req: NextRequest) {
         high52w: true,
         low52w: true,
         promoterHolding: true,
+        grahamNumber: true,
       },
     });
 
-    if (strictResults.length === 0) {
+    const strictFiltered = priceBelowGraham
+      ? strictResults.filter((stock) => stock.grahamNumber > 0 && stock.currentPrice > 0 && stock.currentPrice < stock.grahamNumber)
+      : strictResults;
+
+    if (strictFiltered.length === 0) {
       return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noStrictMatches, keywords ?? []);
     }
 
-    const seenSymbols = new Set(strictResults.map((stock) => stock.symbol));
-    let combinedResults = [...strictResults];
+    const seenSymbols = new Set(strictFiltered.map((stock) => stock.symbol));
+    let combinedResults = [...strictFiltered];
 
     if (combinedResults.length < requestedLimit) {
       const extraTokens = extractSearchTokens(query, MAX_FALLBACK_TOKENS, keywords ?? []);
@@ -674,10 +696,14 @@ export async function POST(req: NextRequest) {
           high52w: true,
           low52w: true,
           promoterHolding: true,
+          grahamNumber: true,
         },
       });
 
-      appendUniqueStocks(combinedResults, backfillResults, seenSymbols, requestedLimit);
+      const filteredBackfill = priceBelowGraham
+        ? backfillResults.filter((stock) => stock.grahamNumber > 0 && stock.currentPrice > 0 && stock.currentPrice < stock.grahamNumber)
+        : backfillResults;
+      appendUniqueStocks(combinedResults, filteredBackfill, seenSymbols, requestedLimit);
     }
 
     if (combinedResults.length < requestedLimit) {
@@ -706,10 +732,14 @@ export async function POST(req: NextRequest) {
           high52w: true,
           low52w: true,
           promoterHolding: true,
+          grahamNumber: true,
         },
       });
 
-      appendUniqueStocks(combinedResults, marketCapFill, seenSymbols, requestedLimit);
+      const filteredMarketCapFill = priceBelowGraham
+        ? marketCapFill.filter((stock) => stock.grahamNumber > 0 && stock.currentPrice > 0 && stock.currentPrice < stock.grahamNumber)
+        : marketCapFill;
+      appendUniqueStocks(combinedResults, filteredMarketCapFill, seenSymbols, requestedLimit);
     }
 
     const results = await maybeRankResultsWithLLM(query, combinedResults, requestedLimit);
