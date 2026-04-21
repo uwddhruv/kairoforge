@@ -29,9 +29,14 @@ const RELEVANCE_WEIGHTS = {
 } as const;
 const VALID_SORT_FIELDS = [
   'marketCap',
+  'currentPrice',
+  'intrinsicValue',
+  'grahamNumber',
   'roe',
   'roce',
   'stockPE',
+  'eps',
+  'pegRatio',
   'pbRatio',
   'dividendYield',
   'salesGrowth5yr',
@@ -77,12 +82,35 @@ function extractNumberFromPattern(query: string, patterns: RegExp[]): number | u
   return undefined;
 }
 
+function hasPositiveNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function buildRangeFilter(min?: number, max?: number, positiveOnly = false): Record<string, number> | null {
+  const filter: Record<string, number> = {};
+  if (hasPositiveNumber(min)) filter.gte = min;
+  if (hasPositiveNumber(max)) filter.lte = max;
+  if (positiveOnly && (filter.gte !== undefined || filter.lte !== undefined)) {
+    filter.gt = 0;
+  }
+  return Object.keys(filter).length > 0 ? filter : null;
+}
+
 function isPriceBelowGraham(stock: Pick<ScreenerResult, 'currentPrice' | 'grahamNumber'>): boolean {
   return (
     typeof stock.grahamNumber === 'number' &&
     stock.grahamNumber > 0 &&
     stock.currentPrice > 0 &&
     stock.currentPrice < stock.grahamNumber
+  );
+}
+
+function isPriceBelowIntrinsic(stock: Pick<ScreenerResult, 'currentPrice' | 'intrinsicValue'>): boolean {
+  return (
+    typeof stock.intrinsicValue === 'number' &&
+    stock.intrinsicValue > 0 &&
+    stock.currentPrice > 0 &&
+    stock.currentPrice < stock.intrinsicValue
   );
 }
 
@@ -113,6 +141,42 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     explanationParts.push('marketCapCategory=Small Cap');
   }
 
+  const minMarketCap = extractNumberFromPattern(boundedQuery, [
+    /\bmarket\s*cap\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:above|over|greater than|more than|min(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:cr|crore|crores)?\s*(?:market\s*cap|mcap)?/i,
+  ]);
+  if (minMarketCap !== undefined && /\b(?:above|over|greater|min|>=|>)\b|[>≥]/i.test(normalized)) {
+    filters.minMarketCap = minMarketCap;
+    explanationParts.push(`minMarketCap=${minMarketCap}`);
+  }
+
+  const maxMarketCap = extractNumberFromPattern(boundedQuery, [
+    /\bmarket\s*cap\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:cr|crore|crores)?\s*(?:market\s*cap|mcap)?/i,
+  ]);
+  if (maxMarketCap !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxMarketCap = maxMarketCap;
+    explanationParts.push(`maxMarketCap=${maxMarketCap}`);
+  }
+
+  const minCurrentPrice = extractNumberFromPattern(boundedQuery, [
+    /\b(?:price|cmp|current\s*price)\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:above|over|greater than|more than|min(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:price|cmp|current\s*price)/i,
+  ]);
+  if (minCurrentPrice !== undefined && /\b(?:above|over|greater|min|>=|>)\b|[>≥]/i.test(normalized)) {
+    filters.minCurrentPrice = minCurrentPrice;
+    explanationParts.push(`minCurrentPrice=${minCurrentPrice}`);
+  }
+
+  const maxCurrentPrice = extractNumberFromPattern(boundedQuery, [
+    /\b(?:price|cmp|current\s*price)\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|lower than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:price|cmp|current\s*price)/i,
+  ]);
+  if (maxCurrentPrice !== undefined && /\b(?:below|under|less|lower|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxCurrentPrice = maxCurrentPrice;
+    explanationParts.push(`maxCurrentPrice=${maxCurrentPrice}`);
+  }
+
   const minROE = extractNumberFromPattern(boundedQuery, [
     /\broe\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
     /(\d+(?:\.\d+)?)\s*%?\s*(?:or\s*more|and\s*above|and\s*higher)?\s*\broe\b/i,
@@ -135,6 +199,14 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     /\b(?:debt(?:\s*to\s*equity)?|d\/e)\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
     /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:debt|debt\s*to\s*equity|d\/e)/i,
   ]);
+  const minDebt = extractNumberFromPattern(boundedQuery, [
+    /\b(?:debt(?:\s*to\s*equity)?|d\/e)\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:above|over|greater than|more than|min(?:imum)?)\s*(\d+(?:\.\d+)?)\s*(?:debt|debt\s*to\s*equity|d\/e)/i,
+  ]);
+  if (minDebt !== undefined && /\b(?:above|over|greater|min|>=|>)\b|[>≥]/i.test(normalized)) {
+    filters.minDebt = minDebt;
+    explanationParts.push(`minDebt=${minDebt}`);
+  }
   if (maxDebt !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
     filters.maxDebt = maxDebt;
     explanationParts.push(`maxDebt=${maxDebt}`);
@@ -196,6 +268,162 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     explanationParts.push(`minPiotroskiScore=${minPiotroskiScore}`);
   }
 
+  const minCurrentRatio = extractNumberFromPattern(boundedQuery, [
+    /\bcurrent\s*ratio\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(\d+(?:\.\d+)?)\s*(?:or\s*more|and\s*above|and\s*higher)?\s*current\s*ratio/i,
+  ]);
+  if (minCurrentRatio !== undefined) {
+    filters.minCurrentRatio = minCurrentRatio;
+    explanationParts.push(`minCurrentRatio=${minCurrentRatio}`);
+  }
+
+  const minQuickRatio = extractNumberFromPattern(boundedQuery, [
+    /\bquick\s*ratio\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(\d+(?:\.\d+)?)\s*(?:or\s*more|and\s*above|and\s*higher)?\s*quick\s*ratio/i,
+  ]);
+  if (minQuickRatio !== undefined) {
+    filters.minQuickRatio = minQuickRatio;
+    explanationParts.push(`minQuickRatio=${minQuickRatio}`);
+  }
+
+  const maxPEG = extractNumberFromPattern(boundedQuery, [
+    /\bpeg(?:\s*ratio)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*peg(?:\s*ratio)?/i,
+  ]);
+  if (maxPEG !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxPEG = maxPEG;
+    explanationParts.push(`maxPEG=${maxPEG}`);
+  }
+
+  const maxEVEbitda = extractNumberFromPattern(boundedQuery, [
+    /\bev(?:\/|\s*)ebitda\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*ev(?:\/|\s*)ebitda/i,
+  ]);
+  if (maxEVEbitda !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxEVEbitda = maxEVEbitda;
+    explanationParts.push(`maxEVEbitda=${maxEVEbitda}`);
+  }
+
+  const minPromoterHolding = extractNumberFromPattern(boundedQuery, [
+    /\bpromoter(?:\s*holding)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+  ]);
+  if (minPromoterHolding !== undefined) {
+    filters.minPromoterHolding = minPromoterHolding;
+    explanationParts.push(`minPromoterHolding=${minPromoterHolding}`);
+  }
+
+  const minFiiHolding = extractNumberFromPattern(boundedQuery, [
+    /\bfii(?:\s*holding)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+  ]);
+  if (minFiiHolding !== undefined) {
+    filters.minFiiHolding = minFiiHolding;
+    explanationParts.push(`minFiiHolding=${minFiiHolding}`);
+  }
+
+  const minDiiHolding = extractNumberFromPattern(boundedQuery, [
+    /\bdii(?:\s*holding)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+  ]);
+  if (minDiiHolding !== undefined) {
+    filters.minDiiHolding = minDiiHolding;
+    explanationParts.push(`minDiiHolding=${minDiiHolding}`);
+  }
+
+  const minEPS = extractNumberFromPattern(boundedQuery, [
+    /\beps\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(\d+(?:\.\d+)?)\s*(?:or\s*more|and\s*above|and\s*higher)?\s*eps/i,
+  ]);
+  if (minEPS !== undefined) {
+    filters.minEPS = minEPS;
+    explanationParts.push(`minEPS=${minEPS}`);
+  }
+
+  const maxNetDebt = extractNumberFromPattern(boundedQuery, [
+    /\bnet\s*debt\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*net\s*debt/i,
+  ]);
+  if (maxNetDebt !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxNetDebt = maxNetDebt;
+    explanationParts.push(`maxNetDebt=${maxNetDebt}`);
+  }
+
+  const minFreeCashFlow3yr = extractNumberFromPattern(boundedQuery, [
+    /\bfree\s*cash\s*flow(?:\s*3\s*yr|\s*3yr)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+  ]);
+  if (minFreeCashFlow3yr !== undefined) {
+    filters.minFreeCashFlow3yr = minFreeCashFlow3yr;
+    explanationParts.push(`minFreeCashFlow3yr=${minFreeCashFlow3yr}`);
+  }
+
+  const minBookValue = extractNumberFromPattern(boundedQuery, [
+    /\bbook\s*value\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:above|over|greater than|more than|min(?:imum)?)\s*(\d+(?:\.\d+)?)\s*book\s*value/i,
+  ]);
+  if (minBookValue !== undefined && /\b(?:above|over|greater|min|>=|>)\b|[>≥]/i.test(normalized)) {
+    filters.minBookValue = minBookValue;
+    explanationParts.push(`minBookValue=${minBookValue}`);
+  }
+
+  const maxBookValue = extractNumberFromPattern(boundedQuery, [
+    /\bbook\s*value\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*book\s*value/i,
+  ]);
+  if (maxBookValue !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxBookValue = maxBookValue;
+    explanationParts.push(`maxBookValue=${maxBookValue}`);
+  }
+
+  const minIntrinsicValue = extractNumberFromPattern(boundedQuery, [
+    /\bintrinsic(?:\s*value)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:above|over|greater than|more than|min(?:imum)?)\s*(\d+(?:\.\d+)?)\s*intrinsic(?:\s*value)?/i,
+  ]);
+  if (minIntrinsicValue !== undefined && /\b(?:above|over|greater|min|>=|>)\b|[>≥]/i.test(normalized)) {
+    filters.minIntrinsicValue = minIntrinsicValue;
+    explanationParts.push(`minIntrinsicValue=${minIntrinsicValue}`);
+  }
+
+  const maxIntrinsicValue = extractNumberFromPattern(boundedQuery, [
+    /\bintrinsic(?:\s*value)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*intrinsic(?:\s*value)?/i,
+  ]);
+  if (maxIntrinsicValue !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxIntrinsicValue = maxIntrinsicValue;
+    explanationParts.push(`maxIntrinsicValue=${maxIntrinsicValue}`);
+  }
+
+  const minGrahamNumber = extractNumberFromPattern(boundedQuery, [
+    /\bgraham(?:\s*number)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:above|over|greater than|more than|min(?:imum)?)\s*(\d+(?:\.\d+)?)\s*graham(?:\s*number)?/i,
+  ]);
+  if (minGrahamNumber !== undefined && /\b(?:above|over|greater|min|>=|>)\b|[>≥]/i.test(normalized)) {
+    filters.minGrahamNumber = minGrahamNumber;
+    explanationParts.push(`minGrahamNumber=${minGrahamNumber}`);
+  }
+
+  const maxGrahamNumber = extractNumberFromPattern(boundedQuery, [
+    /\bgraham(?:\s*number)?\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+    /(?:below|under|less than|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*graham(?:\s*number)?/i,
+  ]);
+  if (maxGrahamNumber !== undefined && /\b(?:below|under|less|max|<=|<)\b|[<≤]/i.test(normalized)) {
+    filters.maxGrahamNumber = maxGrahamNumber;
+    explanationParts.push(`maxGrahamNumber=${maxGrahamNumber}`);
+  }
+
+  const minHigh52w = extractNumberFromPattern(boundedQuery, [
+    /\b52\s*w(?:eek)?\s*high\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+  ]);
+  if (minHigh52w !== undefined) {
+    filters.minHigh52w = minHigh52w;
+    explanationParts.push(`minHigh52w=${minHigh52w}`);
+  }
+
+  const maxLow52w = extractNumberFromPattern(boundedQuery, [
+    /\b52\s*w(?:eek)?\s*low\b[^\d]{0,20}(\d+(?:\.\d+)?)/i,
+  ]);
+  if (maxLow52w !== undefined) {
+    filters.maxLow52w = maxLow52w;
+    explanationParts.push(`maxLow52w=${maxLow52w}`);
+  }
+
   const priceTerms = String.raw`\b(?:price|cmp|current\s*price)\b`;
   const lowerThanTerms = String.raw`(?:below|under|less than|lower than|<)`;
   const higherThanTerms = String.raw`(?:above|greater than|higher than|>)`;
@@ -204,10 +432,19 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     `${priceTerms}.*${lowerThanTerms}.*?${grahamTerms}|${grahamTerms}.*${higherThanTerms}\\s*${priceTerms}`,
     'i'
   );
+  const intrinsicTerms = String.raw`\bintrinsic(?:\s*value)?\b`;
+  const priceBelowIntrinsicRegex = new RegExp(
+    `${priceTerms}.*${lowerThanTerms}.*?${intrinsicTerms}|${intrinsicTerms}.*${higherThanTerms}\\s*${priceTerms}`,
+    'i'
+  );
 
   if (priceBelowGrahamRegex.test(normalized)) {
     filters.priceBelowGraham = true;
     explanationParts.push('priceBelowGraham=true');
+  }
+  if (priceBelowIntrinsicRegex.test(normalized)) {
+    filters.priceBelowIntrinsic = true;
+    explanationParts.push('priceBelowIntrinsic=true');
   }
 
   if (/\b(low|lowest|cheap|undervalued)\b.*\b(pe|p\/e)\b|\b(pe|p\/e)\b.*\b(low|lowest|cheap|undervalued)\b/i.test(normalized)) {
@@ -300,16 +537,27 @@ type ScreenerResult = {
   marketCapCategory: string;
   currentPrice: number;
   marketCap: number;
+  bookValue?: number;
+  intrinsicValue?: number;
+  grahamNumber?: number;
   stockPE: number;
   roe: number;
   roce: number;
   debtToEquity: number;
   dividendYield: number;
   salesGrowth5yr: number;
+  currentRatio?: number;
+  quickRatio?: number;
+  pegRatio?: number;
+  eps?: number;
+  freeCashFlow3yr?: number;
+  netDebt?: number;
   high52w: number;
   low52w: number;
   promoterHolding: number;
-  grahamNumber?: number;
+  fiiHolding?: number;
+  diiHolding?: number;
+  evEbitda?: number;
   industry?: string;
   pbRatio?: number;
   profitVar5yr?: number;
@@ -543,8 +791,20 @@ export async function POST(req: NextRequest) {
     const {
       sector,
       marketCapCategory,
+      minMarketCap,
+      maxMarketCap,
+      minCurrentPrice,
+      maxCurrentPrice,
+      minBookValue,
+      maxBookValue,
+      minIntrinsicValue,
+      maxIntrinsicValue,
+      minGrahamNumber,
+      maxGrahamNumber,
+      minPE,
       minROE,
       minROCE,
+      minDebt,
       maxPE,
       maxPB,
       maxDebt: maxDebtToEquity,
@@ -552,7 +812,20 @@ export async function POST(req: NextRequest) {
       minSalesGrowth5yr,
       minProfitGrowth5yr,
       minPiotroskiScore,
+      minCurrentRatio,
+      minQuickRatio,
+      maxPEG,
+      maxEVEbitda,
+      minPromoterHolding,
+      minFiiHolding,
+      minDiiHolding,
+      minEPS,
+      maxNetDebt,
+      minFreeCashFlow3yr,
+      minHigh52w,
+      maxLow52w,
       priceBelowGraham,
+      priceBelowIntrinsic,
       keywords,
       sortBy = 'marketCap',
       sortOrder = 'desc',
@@ -561,8 +834,20 @@ export async function POST(req: NextRequest) {
     } = filters as {
       sector?: string;
       marketCapCategory?: string;
+      minMarketCap?: number;
+      maxMarketCap?: number;
+      minCurrentPrice?: number;
+      maxCurrentPrice?: number;
+      minBookValue?: number;
+      maxBookValue?: number;
+      minIntrinsicValue?: number;
+      maxIntrinsicValue?: number;
+      minGrahamNumber?: number;
+      maxGrahamNumber?: number;
+      minPE?: number;
       minROE?: number;
       minROCE?: number;
+      minDebt?: number;
       maxPE?: number;
       maxPB?: number;
       maxDebt?: number;
@@ -570,7 +855,20 @@ export async function POST(req: NextRequest) {
       minSalesGrowth5yr?: number;
       minProfitGrowth5yr?: number;
       minPiotroskiScore?: number;
+      minCurrentRatio?: number;
+      minQuickRatio?: number;
+      maxPEG?: number;
+      maxEVEbitda?: number;
+      minPromoterHolding?: number;
+      minFiiHolding?: number;
+      minDiiHolding?: number;
+      minEPS?: number;
+      maxNetDebt?: number;
+      minFreeCashFlow3yr?: number;
+      minHigh52w?: number;
+      maxLow52w?: number;
       priceBelowGraham?: boolean;
+      priceBelowIntrinsic?: boolean;
       keywords?: string[];
       sortBy?: string;
       sortOrder?: string;
@@ -581,8 +879,20 @@ export async function POST(req: NextRequest) {
     const hasStructuredFilters = Boolean(
       sector ||
       marketCapCategory ||
+      hasPositiveNumber(minMarketCap) ||
+      hasPositiveNumber(maxMarketCap) ||
+      hasPositiveNumber(minCurrentPrice) ||
+      hasPositiveNumber(maxCurrentPrice) ||
+      hasPositiveNumber(minBookValue) ||
+      hasPositiveNumber(maxBookValue) ||
+      hasPositiveNumber(minIntrinsicValue) ||
+      hasPositiveNumber(maxIntrinsicValue) ||
+      hasPositiveNumber(minGrahamNumber) ||
+      hasPositiveNumber(maxGrahamNumber) ||
+      hasPositiveNumber(minPE) ||
       (typeof minROE === 'number' && minROE > 0) ||
       (typeof minROCE === 'number' && minROCE > 0) ||
+      hasPositiveNumber(minDebt) ||
       (typeof maxPE === 'number' && maxPE > 0) ||
       (typeof maxPB === 'number' && maxPB > 0) ||
       (typeof maxDebtToEquity === 'number' && maxDebtToEquity > 0) ||
@@ -590,7 +900,20 @@ export async function POST(req: NextRequest) {
       (typeof minSalesGrowth5yr === 'number' && minSalesGrowth5yr > 0) ||
       (typeof minProfitGrowth5yr === 'number' && minProfitGrowth5yr > 0) ||
       (typeof minPiotroskiScore === 'number' && minPiotroskiScore > 0) ||
-      priceBelowGraham === true
+      hasPositiveNumber(minCurrentRatio) ||
+      hasPositiveNumber(minQuickRatio) ||
+      hasPositiveNumber(maxPEG) ||
+      hasPositiveNumber(maxEVEbitda) ||
+      hasPositiveNumber(minPromoterHolding) ||
+      hasPositiveNumber(minFiiHolding) ||
+      hasPositiveNumber(minDiiHolding) ||
+      hasPositiveNumber(minEPS) ||
+      hasPositiveNumber(maxNetDebt) ||
+      hasPositiveNumber(minFreeCashFlow3yr) ||
+      hasPositiveNumber(minHigh52w) ||
+      hasPositiveNumber(maxLow52w) ||
+      priceBelowGraham === true ||
+      priceBelowIntrinsic === true
     );
 
     if (!hasStructuredFilters) {
@@ -604,15 +927,39 @@ export async function POST(req: NextRequest) {
     const where: Record<string, unknown> = {};
     if (sector) where.sector = { contains: sector };
     if (marketCapCategory) where.marketCapCategory = marketCapCategory;
+    const marketCapFilter = buildRangeFilter(minMarketCap, maxMarketCap);
+    if (marketCapFilter) where.marketCap = marketCapFilter;
+    const currentPriceFilter = buildRangeFilter(minCurrentPrice, maxCurrentPrice, true);
+    if (currentPriceFilter) where.currentPrice = currentPriceFilter;
+    const bookValueFilter = buildRangeFilter(minBookValue, maxBookValue, true);
+    if (bookValueFilter) where.bookValue = bookValueFilter;
+    const intrinsicValueFilter = buildRangeFilter(minIntrinsicValue, maxIntrinsicValue, true);
+    if (intrinsicValueFilter) where.intrinsicValue = intrinsicValueFilter;
+    const grahamNumberFilter = buildRangeFilter(minGrahamNumber, maxGrahamNumber, true);
+    if (grahamNumberFilter) where.grahamNumber = grahamNumberFilter;
+    const peFilter = buildRangeFilter(minPE, maxPE, true);
+    if (peFilter) where.stockPE = peFilter;
     if (minROE && minROE > 0) where.roe = { gte: minROE };
     if (minROCE && minROCE > 0) where.roce = { gte: minROCE };
-    if (maxPE && maxPE > 0) where.stockPE = { lte: maxPE, gt: 0 };
     if (maxPB && maxPB > 0) where.pbRatio = { lte: maxPB, gt: 0 };
-    if (maxDebtToEquity && maxDebtToEquity > 0) where.debtToEquity = { lte: maxDebtToEquity };
+    const debtFilter = buildRangeFilter(minDebt, maxDebtToEquity);
+    if (debtFilter) where.debtToEquity = debtFilter;
     if (minDividendYield && minDividendYield > 0) where.dividendYield = { gte: minDividendYield };
     if (minSalesGrowth5yr && minSalesGrowth5yr > 0) where.salesGrowth5yr = { gte: minSalesGrowth5yr };
     if (minProfitGrowth5yr && minProfitGrowth5yr > 0) where.profitVar5yr = { gte: minProfitGrowth5yr };
     if (minPiotroskiScore && minPiotroskiScore > 0) where.piotroskiScore = { gte: minPiotroskiScore };
+    if (minCurrentRatio && minCurrentRatio > 0) where.currentRatio = { gte: minCurrentRatio };
+    if (minQuickRatio && minQuickRatio > 0) where.quickRatio = { gte: minQuickRatio };
+    if (maxPEG && maxPEG > 0) where.pegRatio = { lte: maxPEG, gt: 0 };
+    if (maxEVEbitda && maxEVEbitda > 0) where.evEbitda = { lte: maxEVEbitda, gt: 0 };
+    if (minPromoterHolding && minPromoterHolding > 0) where.promoterHolding = { gte: minPromoterHolding };
+    if (minFiiHolding && minFiiHolding > 0) where.fiiHolding = { gte: minFiiHolding };
+    if (minDiiHolding && minDiiHolding > 0) where.diiHolding = { gte: minDiiHolding };
+    if (minEPS && minEPS > 0) where.eps = { gte: minEPS };
+    if (maxNetDebt && maxNetDebt > 0) where.netDebt = { lte: maxNetDebt };
+    if (minFreeCashFlow3yr && minFreeCashFlow3yr > 0) where.freeCashFlow3yr = { gte: minFreeCashFlow3yr };
+    if (minHigh52w && minHigh52w > 0) where.high52w = { gte: minHigh52w };
+    if (maxLow52w && maxLow52w > 0) where.low52w = { lte: maxLow52w };
 
     const sortAliasMap: Record<string, string> = {
       pe: 'stockPE',
@@ -630,7 +977,7 @@ export async function POST(req: NextRequest) {
       ? Math.max(MIN_RESULT_LIMIT, Math.min(MAX_RESULT_LIMIT, Math.round(parsedLimit)))
       : DEFAULT_RESULT_LIMIT;
 
-    const strictTake = priceBelowGraham
+    const strictTake = (priceBelowGraham || priceBelowIntrinsic)
       // Relative filters like currentPrice < grahamNumber are applied in-memory, so fetch a wider slice first.
       ? Math.min(MAX_RESULT_LIMIT, Math.max(requestedLimit, requestedLimit * BACKFILL_FETCH_MULTIPLIER))
       : requestedLimit;
@@ -647,6 +994,9 @@ export async function POST(req: NextRequest) {
         marketCapCategory: true,
         currentPrice: true,
         marketCap: true,
+        bookValue: true,
+        intrinsicValue: true,
+        grahamNumber: true,
         stockPE: true,
         pbRatio: true,
         roe: true,
@@ -656,16 +1006,26 @@ export async function POST(req: NextRequest) {
         salesGrowth5yr: true,
         profitVar5yr: true,
         piotroskiScore: true,
+        currentRatio: true,
+        quickRatio: true,
+        pegRatio: true,
+        evEbitda: true,
+        fiiHolding: true,
+        diiHolding: true,
+        eps: true,
+        netDebt: true,
+        freeCashFlow3yr: true,
         high52w: true,
         low52w: true,
         promoterHolding: true,
-        grahamNumber: true,
       },
     });
 
-    const strictFiltered = priceBelowGraham
-      ? strictResults.filter(isPriceBelowGraham)
-      : strictResults;
+    const strictFiltered = strictResults.filter((stock) => {
+      if (priceBelowGraham === true && !isPriceBelowGraham(stock)) return false;
+      if (priceBelowIntrinsic === true && !isPriceBelowIntrinsic(stock)) return false;
+      return true;
+    });
 
     if (strictFiltered.length === 0) {
       return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noStrictMatches, keywords ?? []);
@@ -699,6 +1059,9 @@ export async function POST(req: NextRequest) {
           marketCapCategory: true,
           currentPrice: true,
           marketCap: true,
+          bookValue: true,
+          intrinsicValue: true,
+          grahamNumber: true,
           stockPE: true,
           pbRatio: true,
           roe: true,
@@ -708,16 +1071,26 @@ export async function POST(req: NextRequest) {
           salesGrowth5yr: true,
           profitVar5yr: true,
           piotroskiScore: true,
+          currentRatio: true,
+          quickRatio: true,
+          pegRatio: true,
+          evEbitda: true,
+          fiiHolding: true,
+          diiHolding: true,
+          eps: true,
+          netDebt: true,
+          freeCashFlow3yr: true,
           high52w: true,
           low52w: true,
           promoterHolding: true,
-          grahamNumber: true,
         },
       });
 
-      const filteredBackfill = priceBelowGraham
-        ? backfillResults.filter(isPriceBelowGraham)
-        : backfillResults;
+      const filteredBackfill = backfillResults.filter((stock) => {
+        if (priceBelowGraham === true && !isPriceBelowGraham(stock)) return false;
+        if (priceBelowIntrinsic === true && !isPriceBelowIntrinsic(stock)) return false;
+        return true;
+      });
       appendUniqueStocks(combinedResults, filteredBackfill, seenSymbols, requestedLimit);
     }
 
@@ -735,6 +1108,9 @@ export async function POST(req: NextRequest) {
           marketCapCategory: true,
           currentPrice: true,
           marketCap: true,
+          bookValue: true,
+          intrinsicValue: true,
+          grahamNumber: true,
           stockPE: true,
           pbRatio: true,
           roe: true,
@@ -744,16 +1120,26 @@ export async function POST(req: NextRequest) {
           salesGrowth5yr: true,
           profitVar5yr: true,
           piotroskiScore: true,
+          currentRatio: true,
+          quickRatio: true,
+          pegRatio: true,
+          evEbitda: true,
+          fiiHolding: true,
+          diiHolding: true,
+          eps: true,
+          netDebt: true,
+          freeCashFlow3yr: true,
           high52w: true,
           low52w: true,
           promoterHolding: true,
-          grahamNumber: true,
         },
       });
 
-      const filteredMarketCapFill = priceBelowGraham
-        ? marketCapFill.filter(isPriceBelowGraham)
-        : marketCapFill;
+      const filteredMarketCapFill = marketCapFill.filter((stock) => {
+        if (priceBelowGraham === true && !isPriceBelowGraham(stock)) return false;
+        if (priceBelowIntrinsic === true && !isPriceBelowIntrinsic(stock)) return false;
+        return true;
+      });
       appendUniqueStocks(combinedResults, filteredMarketCapFill, seenSymbols, requestedLimit);
     }
 
