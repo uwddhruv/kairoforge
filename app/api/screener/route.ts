@@ -77,6 +77,15 @@ function extractNumberFromPattern(query: string, patterns: RegExp[]): number | u
   return undefined;
 }
 
+function isPriceBelowGraham(stock: Pick<ScreenerResult, 'currentPrice' | 'grahamNumber'>): boolean {
+  return (
+    typeof stock.grahamNumber === 'number' &&
+    stock.grahamNumber > 0 &&
+    stock.currentPrice > 0 &&
+    stock.currentPrice < stock.grahamNumber
+  );
+}
+
 function parseScreenerQueryLocally(query: string): Record<string, unknown> {
   const boundedQuery = query.slice(0, MAX_LOCAL_PARSE_QUERY_LENGTH);
   const normalized = boundedQuery.toLowerCase();
@@ -187,11 +196,16 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
     explanationParts.push(`minPiotroskiScore=${minPiotroskiScore}`);
   }
 
-  if (
-    /\b(?:price|cmp|current\s*price)\b.*(?:below|under|less than|lower than|<).*?\bgraham(?:\s*number)?\b|\bgraham(?:\s*number)?\b.*(?:above|greater than|higher than|>)\s*\b(?:price|cmp|current\s*price)\b/i.test(
-      normalized
-    )
-  ) {
+  const priceTerms = String.raw`\b(?:price|cmp|current\s*price)\b`;
+  const lowerThanTerms = String.raw`(?:below|under|less than|lower than|<)`;
+  const higherThanTerms = String.raw`(?:above|greater than|higher than|>)`;
+  const grahamTerms = String.raw`\bgraham(?:\s*number)?\b`;
+  const priceBelowGrahamRegex = new RegExp(
+    `${priceTerms}.*${lowerThanTerms}.*?${grahamTerms}|${grahamTerms}.*${higherThanTerms}\\s*${priceTerms}`,
+    'i'
+  );
+
+  if (priceBelowGrahamRegex.test(normalized)) {
     filters.priceBelowGraham = true;
     explanationParts.push('priceBelowGraham=true');
   }
@@ -617,6 +631,7 @@ export async function POST(req: NextRequest) {
       : DEFAULT_RESULT_LIMIT;
 
     const strictTake = priceBelowGraham
+      // Relative filters like currentPrice < grahamNumber are applied in-memory, so fetch a wider slice first.
       ? Math.min(MAX_RESULT_LIMIT, Math.max(requestedLimit, requestedLimit * BACKFILL_FETCH_MULTIPLIER))
       : requestedLimit;
 
@@ -649,7 +664,7 @@ export async function POST(req: NextRequest) {
     });
 
     const strictFiltered = priceBelowGraham
-      ? strictResults.filter((stock) => stock.grahamNumber > 0 && stock.currentPrice > 0 && stock.currentPrice < stock.grahamNumber)
+      ? strictResults.filter(isPriceBelowGraham)
       : strictResults;
 
     if (strictFiltered.length === 0) {
@@ -701,7 +716,7 @@ export async function POST(req: NextRequest) {
       });
 
       const filteredBackfill = priceBelowGraham
-        ? backfillResults.filter((stock) => stock.grahamNumber > 0 && stock.currentPrice > 0 && stock.currentPrice < stock.grahamNumber)
+        ? backfillResults.filter(isPriceBelowGraham)
         : backfillResults;
       appendUniqueStocks(combinedResults, filteredBackfill, seenSymbols, requestedLimit);
     }
@@ -737,7 +752,7 @@ export async function POST(req: NextRequest) {
       });
 
       const filteredMarketCapFill = priceBelowGraham
-        ? marketCapFill.filter((stock) => stock.grahamNumber > 0 && stock.currentPrice > 0 && stock.currentPrice < stock.grahamNumber)
+        ? marketCapFill.filter(isPriceBelowGraham)
         : marketCapFill;
       appendUniqueStocks(combinedResults, filteredMarketCapFill, seenSymbols, requestedLimit);
     }
