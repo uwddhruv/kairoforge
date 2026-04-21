@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { parseScreenerQuery, rankScreenerCandidates } from '@/lib/openai';
+import { hasLlmProvider, parseScreenerQuery, rankScreenerCandidates } from '@/lib/openai';
 
 const MAX_FALLBACK_TOKENS = 8;
 const FALLBACK_RESULT_LIMIT = 20;
@@ -8,9 +8,25 @@ const MAX_LOCAL_PARSE_QUERY_LENGTH = 300;
 const MIN_RESULT_LIMIT = 1;
 const MAX_RESULT_LIMIT = 50;
 const MIN_AI_RESULT_LIMIT = 20;
+// Avoid very short substring matches that can make relevance ranking noisy.
+const MIN_QUERY_LENGTH_FOR_PARTIAL_MATCH = 2;
 const LLM_RANK_CANDIDATE_LIMIT = 60;
 const BACKFILL_FETCH_MULTIPLIER = 2;
 const MAX_DEBT_FREE_THRESHOLD = 0.1;
+const RELEVANCE_WEIGHTS = {
+  exactSymbol: 120,
+  symbolPrefix: 80,
+  symbolContains: 50,
+  fullNameMatch: 70,
+  fullSectorIndustryMatch: 45,
+  tokenExactSymbol: 60,
+  tokenSymbolPrefix: 30,
+  tokenSymbolContains: 20,
+  tokenName: 18,
+  tokenSector: 16,
+  tokenIndustry: 16,
+  tokenCapCategory: 10,
+} as const;
 const VALID_SORT_FIELDS = [
   'marketCap',
   'roe',
@@ -281,16 +297,22 @@ async function maybeRankResultsWithLLM(
   candidates: ScreenerResult[],
   limit: number
 ): Promise<ScreenerResult[]> {
-  if (!process.env.OPENAI_API_KEY || candidates.length === 0) {
-    return candidates.slice(0, limit);
+  if (candidates.length === 0) {
+    return [];
   }
 
+  const relevanceOrdered = rankResultsByQueryRelevance(query, candidates);
+
+  if (!hasLlmProvider()) {
+    return relevanceOrdered.slice(0, limit);
+  }
+
+  // Keep token usage and latency bounded while still allowing broad reranking.
+  // We cap the candidate pool that gets sent to the LLM and preserve deterministic fallback ordering for the rest.
   try {
-    // Keep token usage and latency bounded while still allowing broad reranking.
-    // We cap the candidate pool that gets sent to the LLM and preserve deterministic fallback ordering for the rest.
     const rankingSymbols = await rankScreenerCandidates(
       query,
-      candidates.slice(0, LLM_RANK_CANDIDATE_LIMIT).map((candidate) => ({
+      relevanceOrdered.slice(0, LLM_RANK_CANDIDATE_LIMIT).map((candidate) => ({
         symbol: candidate.symbol,
         name: candidate.name,
         sector: candidate.sector,
@@ -310,19 +332,72 @@ async function maybeRankResultsWithLLM(
       limit
     );
 
-    const bySymbol = new Map(candidates.map((candidate) => [candidate.symbol, candidate]));
+    const bySymbol = new Map(relevanceOrdered.map((candidate) => [candidate.symbol, candidate]));
     const ranked = rankingSymbols
       .map((symbol) => bySymbol.get(symbol))
       .filter((candidate): candidate is ScreenerResult => Boolean(candidate));
 
     const rankedSymbols = new Set(ranked.map((candidate) => candidate.symbol));
-    const remaining = candidates.filter((candidate) => !rankedSymbols.has(candidate.symbol));
+    const remaining = relevanceOrdered.filter((candidate) => !rankedSymbols.has(candidate.symbol));
 
     return [...ranked, ...remaining].slice(0, limit);
   } catch (error) {
-    console.error('LLM ranking failed, returning default order:', error);
-    return candidates.slice(0, limit);
+    console.error('LLM ranking failed, returning local relevance order:', error);
+    return relevanceOrdered.slice(0, limit);
   }
+}
+
+function rankResultsByQueryRelevance(query: string, candidates: ScreenerResult[]): ScreenerResult[] {
+  const trimmed = query.trim();
+  if (!trimmed) return candidates;
+
+  const queryLower = trimmed.toLowerCase();
+  const queryUpper = trimmed.toUpperCase();
+  const tokens = extractSearchTokens(trimmed, MAX_FALLBACK_TOKENS);
+
+  const scored = candidates.map((candidate, index) => {
+    let score = 0;
+    const symbol = candidate.symbol.toUpperCase();
+    const name = (candidate.name ?? '').toLowerCase();
+    const sector = (candidate.sector ?? '').toLowerCase();
+    const industry = (candidate.industry ?? '').toLowerCase();
+    const capCategory = (candidate.marketCapCategory ?? '').toLowerCase();
+
+    if (symbol === queryUpper) score += RELEVANCE_WEIGHTS.exactSymbol;
+    else if (symbol.startsWith(queryUpper)) score += RELEVANCE_WEIGHTS.symbolPrefix;
+    else if (symbol.includes(queryUpper)) score += RELEVANCE_WEIGHTS.symbolContains;
+
+    if (queryLower.length > MIN_QUERY_LENGTH_FOR_PARTIAL_MATCH && name.includes(queryLower)) {
+      score += RELEVANCE_WEIGHTS.fullNameMatch;
+    }
+    if (
+      queryLower.length > MIN_QUERY_LENGTH_FOR_PARTIAL_MATCH &&
+      (sector.includes(queryLower) || industry.includes(queryLower))
+    ) {
+      score += RELEVANCE_WEIGHTS.fullSectorIndustryMatch;
+    }
+
+    for (const token of tokens) {
+      const tokenUpper = token.toUpperCase();
+      if (symbol === tokenUpper) score += RELEVANCE_WEIGHTS.tokenExactSymbol;
+      else if (symbol.startsWith(tokenUpper)) score += RELEVANCE_WEIGHTS.tokenSymbolPrefix;
+      else if (symbol.includes(tokenUpper)) score += RELEVANCE_WEIGHTS.tokenSymbolContains;
+
+      if (name.includes(token)) score += RELEVANCE_WEIGHTS.tokenName;
+      if (sector.includes(token)) score += RELEVANCE_WEIGHTS.tokenSector;
+      if (industry.includes(token)) score += RELEVANCE_WEIGHTS.tokenIndustry;
+      if (capCategory.includes(token)) score += RELEVANCE_WEIGHTS.tokenCapCategory;
+    }
+
+    return { candidate, index, score };
+  });
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.index - b.index;
+  });
+
+  return scored.map((item) => item.candidate);
 }
 
 function appendUniqueStocks(
@@ -429,7 +504,7 @@ export async function POST(req: NextRequest) {
     let filters: Record<string, unknown>;
     let parseFallbackExplanation: string | null = null;
     try {
-      if (!process.env.OPENAI_API_KEY) {
+      if (!hasLlmProvider()) {
         parseFallbackExplanation = FALLBACK_EXPLANATIONS.noAiKey;
         filters = parseScreenerQueryLocally(query);
       } else {

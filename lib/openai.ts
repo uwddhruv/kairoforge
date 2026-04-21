@@ -1,14 +1,127 @@
 import OpenAI from 'openai';
 
-let _openai: OpenAI | null = null;
+type LlmProvider = {
+  name: 'openai' | 'perplexity';
+  apiKey: string;
+  model: string;
+  baseURL?: string;
+  supportsJsonResponseFormat: boolean;
+};
 
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    _openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY ?? 'placeholder',
+const providerClients = new Map<string, OpenAI>();
+
+function getProviders(): LlmProvider[] {
+  const providers: LlmProvider[] = [];
+
+  if (process.env.OPENAI_API_KEY) {
+    providers.push({
+      name: 'openai',
+      apiKey: process.env.OPENAI_API_KEY,
+      model: process.env.OPENAI_MODEL ?? 'gpt-4o',
+      baseURL: process.env.OPENAI_BASE_URL,
+      supportsJsonResponseFormat: true,
     });
   }
-  return _openai;
+
+  if (process.env.PERPLEXITY_API_KEY) {
+    providers.push({
+      name: 'perplexity',
+      apiKey: process.env.PERPLEXITY_API_KEY,
+      model: process.env.PERPLEXITY_MODEL ?? 'sonar-pro',
+      baseURL: process.env.PERPLEXITY_BASE_URL ?? 'https://api.perplexity.ai',
+      supportsJsonResponseFormat: false,
+    });
+  }
+
+  return providers;
+}
+
+export function hasLlmProvider(): boolean {
+  return getProviders().length > 0;
+}
+
+function getClient(provider: LlmProvider): OpenAI {
+  const clientKey = [
+    provider.name,
+    provider.baseURL ?? 'default',
+    provider.model,
+  ].join(':');
+
+  if (!providerClients.has(clientKey)) {
+    providerClients.set(
+      clientKey,
+      new OpenAI({
+        apiKey: provider.apiKey,
+        baseURL: provider.baseURL,
+      })
+    );
+  }
+
+  return providerClients.get(clientKey)!;
+}
+
+function parseJsonResponse<T>(content: string): T {
+  try {
+    return JSON.parse(content) as T;
+  } catch {
+    const fenceMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const fenced = fenceMatch?.[1]?.trim();
+    if (fenced) {
+      return JSON.parse(fenced) as T;
+    }
+
+    const objectMatch = content.match(/\{[\s\S]*\}/);
+    if (objectMatch?.[0]) {
+      return JSON.parse(objectMatch[0]) as T;
+    }
+
+    throw new Error('Unable to parse JSON response from LLM');
+  }
+}
+
+function filterStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+type ChatOptions = {
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  temperature: number;
+  max_tokens?: number;
+  expectJson?: boolean;
+};
+
+async function runChatCompletion(options: ChatOptions): Promise<string> {
+  const providers = getProviders();
+  if (providers.length === 0) {
+    throw new Error('No configured LLM provider');
+  }
+
+  let lastError: unknown = null;
+
+  for (const provider of providers) {
+    try {
+      const client = getClient(provider);
+      const response = await client.chat.completions.create({
+        model: provider.model,
+        messages: options.messages,
+        temperature: options.temperature,
+        ...(options.max_tokens !== undefined ? { max_tokens: options.max_tokens } : {}),
+        ...(options.expectJson && provider.supportsJsonResponseFormat
+          ? { response_format: { type: 'json_object' as const } }
+          : {}),
+      });
+
+      const content = response.choices[0]?.message?.content ?? '';
+      if (content) return content;
+      lastError = new Error(`Empty response from ${provider.name}`);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error('All LLM providers failed');
 }
 
 const SYSTEM_PROMPT = `You are an Indian stock market analyst assistant for KairoForge. 
@@ -19,9 +132,7 @@ You are knowledgeable about NSE/BSE listed companies, fundamental analysis, and 
 
 /** Parse a natural language screener query into structured filter criteria */
 export async function parseScreenerQuery(query: string): Promise<Record<string, unknown>> {
-  const openai = getOpenAI();
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
+  const content = await runChatCompletion({
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
@@ -55,11 +166,10 @@ Return only valid JSON, no markdown.`,
       },
     ],
     temperature: 0.1,
-    response_format: { type: 'json_object' },
+    expectJson: true,
   });
 
-  const content = response.choices[0].message.content ?? '{}';
-  return JSON.parse(content);
+  return parseJsonResponse<Record<string, unknown>>(content);
 }
 
 interface ScreenerCandidate {
@@ -88,9 +198,7 @@ export async function rankScreenerCandidates(
 ): Promise<string[]> {
   if (candidates.length === 0 || limit <= 0) return [];
 
-  const openai = getOpenAI();
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
+  const content = await runChatCompletion({
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
@@ -114,11 +222,10 @@ Rules:
       },
     ],
     temperature: 0.1,
-    response_format: { type: 'json_object' },
+    expectJson: true,
   });
 
-  const content = response.choices[0].message.content ?? '{}';
-  const parsed = JSON.parse(content) as { symbols?: unknown };
+  const parsed = parseJsonResponse<{ symbols?: unknown }>(content);
   const rankedSymbols = Array.isArray(parsed.symbols) ? parsed.symbols : [];
   return rankedSymbols.filter((value): value is string => typeof value === 'string');
 }
@@ -128,9 +235,7 @@ export async function generateStockAnalysis(
   symbol: string,
   stockData: Record<string, unknown>
 ): Promise<{ pros: string[]; cons: string[]; summary: string; disclaimer: string }> {
-  const openai = getOpenAI();
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
+  const content = await runChatCompletion({
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
@@ -151,18 +256,21 @@ Return only valid JSON, no markdown.`,
       },
     ],
     temperature: 0.3,
-    response_format: { type: 'json_object' },
+    expectJson: true,
   });
 
-  const content = response.choices[0].message.content ?? '{}';
-  const parsed = JSON.parse(content);
+  const parsed = parseJsonResponse<Record<string, unknown>>(content);
+  const pros = filterStringArray(parsed.pros);
+  const cons = filterStringArray(parsed.cons);
+
   return {
-    pros: parsed.pros ?? [],
-    cons: parsed.cons ?? [],
-    summary: parsed.summary ?? '',
+    pros,
+    cons,
+    summary: typeof parsed.summary === 'string' ? parsed.summary : '',
     disclaimer:
-      parsed.disclaimer ??
-      'This analysis is for informational purposes only and does not constitute investment advice.',
+      typeof parsed.disclaimer === 'string'
+        ? parsed.disclaimer
+        : 'This analysis is for informational purposes only and does not constitute investment advice.',
   };
 }
 
@@ -171,9 +279,7 @@ export async function generateStockOfDay(
   symbol: string,
   stockData: Record<string, unknown>
 ): Promise<string> {
-  const openai = getOpenAI();
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
+  const content = await runChatCompletion({
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
@@ -194,14 +300,12 @@ Do NOT make price predictions or buy/sell recommendations.`,
     temperature: 0.5,
   });
 
-  return response.choices[0].message.content ?? '';
+  return content;
 }
 
 /** Explain a financial metric in simple terms */
 export async function explainMetric(metricName: string): Promise<string> {
-  const openai = getOpenAI();
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
+  return runChatCompletion({
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
@@ -212,8 +316,6 @@ export async function explainMetric(metricName: string): Promise<string> {
     temperature: 0.3,
     max_tokens: 200,
   });
-
-  return response.choices[0].message.content ?? '';
 }
 
 /** Compare multiple stocks */
@@ -221,9 +323,7 @@ export async function compareStocks(
   symbols: string[],
   stocksData: Record<string, unknown>[]
 ): Promise<string> {
-  const openai = getOpenAI();
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
+  return runChatCompletion({
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
@@ -247,8 +347,4 @@ Be concise, data-driven. End with risk disclaimer. No buy/sell recommendations.
     temperature: 0.3,
     max_tokens: 600,
   });
-
-  return response.choices[0].message.content ?? '';
 }
-
-export default getOpenAI;
