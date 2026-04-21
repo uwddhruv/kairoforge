@@ -90,7 +90,7 @@ function buildRangeFilter(min?: number, max?: number, positiveOnly = false): Rec
   const filter: Record<string, number> = {};
   if (hasPositiveNumber(min)) filter.gte = min;
   if (hasPositiveNumber(max)) filter.lte = max;
-  if (positiveOnly && (filter.gte !== undefined || filter.lte !== undefined)) {
+  if (positiveOnly && filter.gte === undefined && (filter.lte !== undefined || max === undefined)) {
     filter.gt = 0;
   }
   return Object.keys(filter).length > 0 ? filter : null;
