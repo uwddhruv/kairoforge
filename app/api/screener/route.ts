@@ -69,6 +69,7 @@ const NUMERIC_FILTER_KEYS = [
   'minHigh52w', 'maxLow52w', 'limit',
 ] as const;
 type NumericFilterKey = (typeof NUMERIC_FILTER_KEYS)[number];
+const ZERO_ALLOWED_NUMERIC_KEYS = new Set<NumericFilterKey>(['minDebt', 'maxDebt', 'maxNetDebt']);
 
 const SECTOR_MATCHERS: Array<{ sector: string; keywords: string[] }> = [
   { sector: 'IT', keywords: ['it', 'software', 'tech', 'technology'] },
@@ -111,13 +112,15 @@ function buildRangeFilter(min?: number, max?: number, positiveOnly = false): Rec
   return Object.keys(filter).length > 0 ? filter : null;
 }
 
-function toPositiveFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+function toPositiveFiniteNumber(value: unknown, allowZero = false): number | undefined {
+  const minAllowed = allowZero ? 0 : Number.EPSILON;
+
+  if (typeof value === 'number' && Number.isFinite(value) && value >= minAllowed) {
     return value;
   }
   if (typeof value === 'string') {
     const parsed = Number(value.trim());
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    if (Number.isFinite(parsed) && parsed >= minAllowed) return parsed;
   }
   return undefined;
 }
@@ -156,6 +159,15 @@ function mergeParsedFilters(
   const merged: Record<string, unknown> = { ...localFilters };
 
   for (const [key, value] of Object.entries(aiFilters)) {
+    if (
+      typeof value === 'number' &&
+      value === 0 &&
+      ZERO_ALLOWED_NUMERIC_KEYS.has(key as NumericFilterKey)
+    ) {
+      merged[key] = value;
+      continue;
+    }
+
     if (key === 'keywords') {
       const localKeywords = Array.isArray(merged.keywords) ? merged.keywords : [];
       const aiKeywords = Array.isArray(value) ? value : [];
@@ -200,7 +212,7 @@ function normalizeParsedFilters(rawFilters: Record<string, unknown>, query: stri
   if (marketCapCategory) normalized.marketCapCategory = marketCapCategory;
 
   for (const key of NUMERIC_FILTER_KEYS) {
-    const parsed = toPositiveFiniteNumber(rawFilters[key]);
+    const parsed = toPositiveFiniteNumber(rawFilters[key], ZERO_ALLOWED_NUMERIC_KEYS.has(key));
     if (parsed === undefined) continue;
 
     if (key === 'limit') {
@@ -1059,7 +1071,7 @@ export async function POST(req: NextRequest) {
       hasPositiveNumber(minDebt) ||
       (typeof maxPE === 'number' && maxPE > 0) ||
       (typeof maxPB === 'number' && maxPB > 0) ||
-      (typeof maxDebtToEquity === 'number' && maxDebtToEquity > 0) ||
+      (typeof maxDebtToEquity === 'number' && maxDebtToEquity >= 0) ||
       (typeof minDividendYield === 'number' && minDividendYield > 0) ||
       (typeof minSalesGrowth5yr === 'number' && minSalesGrowth5yr > 0) ||
       (typeof minProfitGrowth5yr === 'number' && minProfitGrowth5yr > 0) ||
@@ -1072,7 +1084,7 @@ export async function POST(req: NextRequest) {
       hasPositiveNumber(minFiiHolding) ||
       hasPositiveNumber(minDiiHolding) ||
       hasPositiveNumber(minEPS) ||
-      hasPositiveNumber(maxNetDebt) ||
+      (typeof maxNetDebt === 'number' && maxNetDebt >= 0) ||
       hasPositiveNumber(minFreeCashFlow3yr) ||
       hasPositiveNumber(minHigh52w) ||
       hasPositiveNumber(maxLow52w) ||
@@ -1106,8 +1118,14 @@ export async function POST(req: NextRequest) {
     if (minROE && minROE > 0) where.roe = { gte: minROE };
     if (minROCE && minROCE > 0) where.roce = { gte: minROCE };
     if (maxPB && maxPB > 0) where.pbRatio = { lte: maxPB, gt: 0 };
-    const debtFilter = buildRangeFilter(minDebt, maxDebtToEquity);
-    if (debtFilter) where.debtToEquity = debtFilter;
+    const debtFilter: Record<string, number> = {};
+    if (typeof minDebt === 'number' && Number.isFinite(minDebt) && minDebt >= 0) {
+      debtFilter.gte = minDebt;
+    }
+    if (typeof maxDebtToEquity === 'number' && Number.isFinite(maxDebtToEquity) && maxDebtToEquity >= 0) {
+      debtFilter.lte = maxDebtToEquity;
+    }
+    if (Object.keys(debtFilter).length > 0) where.debtToEquity = debtFilter;
     if (minDividendYield && minDividendYield > 0) where.dividendYield = { gte: minDividendYield };
     if (minSalesGrowth5yr && minSalesGrowth5yr > 0) where.salesGrowth5yr = { gte: minSalesGrowth5yr };
     if (minProfitGrowth5yr && minProfitGrowth5yr > 0) where.profitVar5yr = { gte: minProfitGrowth5yr };
