@@ -10,6 +10,8 @@ const MIN_RESULT_LIMIT = 1;
 const MAX_RESULT_LIMIT = 1500;
 // Avoid very short substring matches that can make relevance ranking noisy.
 const MIN_QUERY_LENGTH_FOR_PARTIAL_MATCH = 2;
+const MIN_SEARCH_TOKEN_LENGTH = 3;
+const MAX_KEYWORD_TOKENS = 10;
 const LLM_RANK_CANDIDATE_LIMIT = 60;
 const BACKFILL_FETCH_MULTIPLIER = 2;
 const MAX_DEBT_FREE_THRESHOLD = 0.1;
@@ -52,8 +54,22 @@ const FALLBACK_EXPLANATIONS = {
 const STOP_WORDS = new Set([
   'a', 'an', 'and', 'are', 'as', 'at', 'above', 'below', 'by', 'for', 'from', 'good',
   'in', 'into', 'is', 'like', 'of', 'on', 'or', 'stocks', 'stock', 'the', 'to', 'top',
-  'with', 'without', 'companies', 'company',
+  'with', 'without', 'companies', 'company', 'show', 'find', 'list', 'give', 'want',
+  'need', 'looking', 'whose', 'that', 'which', 'than', 'between', 'under', 'over',
+  'best', 'better', 'highest', 'lowest', 'more', 'less', 'near', 'around', 'based',
 ]);
+
+const NUMERIC_FILTER_KEYS = [
+  'minMarketCap', 'maxMarketCap', 'minCurrentPrice', 'maxCurrentPrice', 'minBookValue',
+  'maxBookValue', 'minIntrinsicValue', 'maxIntrinsicValue', 'minGrahamNumber',
+  'maxGrahamNumber', 'minPE', 'maxPE', 'minROE', 'minROCE', 'minDebt', 'maxDebt', 'maxPB',
+  'minDividendYield', 'minSalesGrowth5yr', 'minProfitGrowth5yr', 'minPiotroskiScore',
+  'minCurrentRatio', 'minQuickRatio', 'maxPEG', 'maxEVEbitda', 'minPromoterHolding',
+  'minFiiHolding', 'minDiiHolding', 'minEPS', 'maxNetDebt', 'minFreeCashFlow3yr',
+  'minHigh52w', 'maxLow52w', 'limit',
+] as const;
+type NumericFilterKey = (typeof NUMERIC_FILTER_KEYS)[number];
+const ZERO_ALLOWED_NUMERIC_KEYS = new Set<NumericFilterKey>(['minDebt', 'maxDebt', 'maxNetDebt']);
 
 const SECTOR_MATCHERS: Array<{ sector: string; keywords: string[] }> = [
   { sector: 'IT', keywords: ['it', 'software', 'tech', 'technology'] },
@@ -94,6 +110,150 @@ function buildRangeFilter(min?: number, max?: number, positiveOnly = false): Rec
     filter.gt = 0;
   }
   return Object.keys(filter).length > 0 ? filter : null;
+}
+
+function toPositiveFiniteNumber(value: unknown, allowZero = false): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && (allowZero ? value >= 0 : value > 0)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed) && (allowZero ? parsed >= 0 : parsed > 0)) return parsed;
+  }
+  return undefined;
+}
+
+function normalizeBooleanTrue(value: unknown): boolean {
+  return value === true || value === 'true' || value === 1 || value === '1';
+}
+
+function normalizeText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function hasPositiveMeaningfulFilterValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0;
+  if (typeof value === 'boolean') return value;
+  if (Array.isArray(value)) {
+    return value.some((item) => {
+      if (item === null || item === undefined) return false;
+      if (typeof item === 'string') return item.trim().length > 0;
+      if (typeof item === 'number') return Number.isFinite(item) && item > 0;
+      if (typeof item === 'boolean') return item;
+      return true;
+    });
+  }
+  return true;
+}
+
+function mergeParsedFilters(
+  localFilters: Record<string, unknown>,
+  aiFilters: Record<string, unknown>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...localFilters };
+
+  for (const [key, value] of Object.entries(aiFilters)) {
+    if (
+      typeof value === 'number' &&
+      value === 0 &&
+      ZERO_ALLOWED_NUMERIC_KEYS.has(key as NumericFilterKey)
+    ) {
+      merged[key] = value;
+      continue;
+    }
+
+    if (key === 'keywords') {
+      const localKeywords = Array.isArray(merged.keywords) ? merged.keywords : [];
+      const aiKeywords = Array.isArray(value) ? value : [];
+      const mergedKeywords = [...localKeywords, ...aiKeywords]
+        .map((item) => String(item).trim())
+        .filter((item) => item.length > 0);
+      if (mergedKeywords.length > 0) {
+        merged.keywords = Array.from(new Set(mergedKeywords));
+      }
+      continue;
+    }
+
+    if (!hasPositiveMeaningfulFilterValue(value)) continue;
+    merged[key] = value;
+  }
+
+  return merged;
+}
+
+function swapIfRangeInverted(
+  filters: Record<string, unknown>,
+  minKey: string,
+  maxKey: string
+): Record<string, unknown> {
+  const nextFilters = { ...filters };
+  const minValue = filters[minKey];
+  const maxValue = filters[maxKey];
+  if (typeof minValue === 'number' && typeof maxValue === 'number' && minValue > maxValue) {
+    nextFilters[minKey] = maxValue;
+    nextFilters[maxKey] = minValue;
+  }
+  return nextFilters;
+}
+
+function normalizeParsedFilters(rawFilters: Record<string, unknown>, query: string): Record<string, unknown> {
+  let normalized: Record<string, unknown> = {};
+
+  const sector = normalizeText(rawFilters.sector);
+  if (sector) normalized.sector = sector;
+
+  const marketCapCategory = normalizeText(rawFilters.marketCapCategory);
+  if (marketCapCategory) normalized.marketCapCategory = marketCapCategory;
+
+  for (const key of NUMERIC_FILTER_KEYS) {
+    const parsed = toPositiveFiniteNumber(rawFilters[key], ZERO_ALLOWED_NUMERIC_KEYS.has(key));
+    if (parsed === undefined) continue;
+
+    if (key === 'limit') {
+      normalized.limit = Math.max(MIN_RESULT_LIMIT, Math.min(MAX_RESULT_LIMIT, Math.round(parsed)));
+      continue;
+    }
+
+    normalized[key] = parsed;
+  }
+
+  const sortBy = normalizeText(rawFilters.sortBy);
+  if (sortBy) normalized.sortBy = sortBy;
+
+  const sortOrderRaw = normalizeText(rawFilters.sortOrder)?.toLowerCase();
+  if (sortOrderRaw === 'asc' || sortOrderRaw === 'desc') {
+    normalized.sortOrder = sortOrderRaw;
+  }
+
+  if (normalizeBooleanTrue(rawFilters.priceBelowGraham)) {
+    normalized.priceBelowGraham = true;
+  }
+  if (normalizeBooleanTrue(rawFilters.priceBelowIntrinsic)) {
+    normalized.priceBelowIntrinsic = true;
+  }
+
+  const explanation = normalizeText(rawFilters.explanation);
+  if (explanation) normalized.explanation = explanation;
+
+  const parsedKeywords = Array.isArray(rawFilters.keywords)
+    ? rawFilters.keywords.map((value) => String(value))
+    : [];
+  const normalizedKeywords = extractSearchTokens(query, MAX_KEYWORD_TOKENS, parsedKeywords);
+  if (normalizedKeywords.length > 0) {
+    normalized.keywords = normalizedKeywords;
+  }
+
+  normalized = swapIfRangeInverted(normalized, 'minMarketCap', 'maxMarketCap');
+  normalized = swapIfRangeInverted(normalized, 'minCurrentPrice', 'maxCurrentPrice');
+  normalized = swapIfRangeInverted(normalized, 'minBookValue', 'maxBookValue');
+  normalized = swapIfRangeInverted(normalized, 'minIntrinsicValue', 'maxIntrinsicValue');
+  normalized = swapIfRangeInverted(normalized, 'minGrahamNumber', 'maxGrahamNumber');
+  normalized = swapIfRangeInverted(normalized, 'minDebt', 'maxDebt');
+  return normalized;
 }
 
 function isPriceBelowGraham(stock: Pick<ScreenerResult, 'currentPrice' | 'grahamNumber'>): boolean {
@@ -490,6 +650,10 @@ async function runFallbackSearch(query: string, explanation: string, extraTokens
   }
 
   const tokens = extractSearchTokens(trimmed, MAX_FALLBACK_TOKENS, extraTokens);
+  if (tokens.length === 0) {
+    return NextResponse.json({ results: [], count: 0, filters: null, explanation });
+  }
+
   const ors = tokens.flatMap((token) => [
     { symbol: { contains: token.toUpperCase() } },
     { name: { contains: token } },
@@ -688,14 +852,22 @@ function appendUniqueStocks(
 
 function extractSearchTokens(query: string, maxTokens: number, extraTokens: string[] = []): string[] {
   const cleanedQueryTokens = query
-    .toLowerCase()
-    .split(/[^a-z0-9&]+/)
-    .map((token) => token.trim())
-    .filter((token) => token && token.length > 1 && !STOP_WORDS.has(token));
+    .split(/[^A-Za-z0-9&]+/)
+    .reduce<string[]>((tokens, token) => {
+      const original = token.trim();
+      if (!original) return tokens;
+
+      const normalized = original.toLowerCase();
+      if (STOP_WORDS.has(normalized)) return tokens;
+      if (normalized.length >= MIN_SEARCH_TOKEN_LENGTH || /^[A-Z0-9]{2,5}$/.test(original)) {
+        tokens.push(normalized);
+      }
+      return tokens;
+    }, []);
 
   const cleanedExtraTokens = extraTokens
     .map((token) => String(token).toLowerCase().trim())
-    .filter((token) => token && token.length > 1 && !STOP_WORDS.has(token));
+    .filter((token) => token.length >= MIN_SEARCH_TOKEN_LENGTH && !STOP_WORDS.has(token));
 
   const merged = Array.from(new Set([...cleanedExtraTokens, ...cleanedQueryTokens]));
   const extraTokenSet = new Set(cleanedExtraTokens);
@@ -773,20 +945,22 @@ export async function POST(req: NextRequest) {
     }
 
     // Parse query with AI, or local fallback parser
-    let filters: Record<string, unknown>;
+    const localFilters = parseScreenerQueryLocally(query);
+    let filters: Record<string, unknown> = localFilters;
     let parseFallbackExplanation: string | null = null;
     try {
       if (!hasLlmProvider()) {
         parseFallbackExplanation = FALLBACK_EXPLANATIONS.noAiKey;
-        filters = parseScreenerQueryLocally(query);
       } else {
-        filters = await parseScreenerQuery(query);
+        const aiFilters = await parseScreenerQuery(query);
+        filters = mergeParsedFilters(localFilters, aiFilters);
       }
     } catch (parseError) {
       console.error('Screener parse fallback:', parseError);
       parseFallbackExplanation = FALLBACK_EXPLANATIONS.parseFailed;
-      filters = parseScreenerQueryLocally(query);
+      filters = localFilters;
     }
+    filters = normalizeParsedFilters(filters, query);
 
     const {
       sector,
@@ -895,7 +1069,7 @@ export async function POST(req: NextRequest) {
       hasPositiveNumber(minDebt) ||
       (typeof maxPE === 'number' && maxPE > 0) ||
       (typeof maxPB === 'number' && maxPB > 0) ||
-      (typeof maxDebtToEquity === 'number' && maxDebtToEquity > 0) ||
+      (typeof maxDebtToEquity === 'number' && maxDebtToEquity >= 0) ||
       (typeof minDividendYield === 'number' && minDividendYield > 0) ||
       (typeof minSalesGrowth5yr === 'number' && minSalesGrowth5yr > 0) ||
       (typeof minProfitGrowth5yr === 'number' && minProfitGrowth5yr > 0) ||
@@ -908,7 +1082,7 @@ export async function POST(req: NextRequest) {
       hasPositiveNumber(minFiiHolding) ||
       hasPositiveNumber(minDiiHolding) ||
       hasPositiveNumber(minEPS) ||
-      hasPositiveNumber(maxNetDebt) ||
+      (typeof maxNetDebt === 'number' && maxNetDebt >= 0) ||
       hasPositiveNumber(minFreeCashFlow3yr) ||
       hasPositiveNumber(minHigh52w) ||
       hasPositiveNumber(maxLow52w) ||
@@ -942,8 +1116,14 @@ export async function POST(req: NextRequest) {
     if (minROE && minROE > 0) where.roe = { gte: minROE };
     if (minROCE && minROCE > 0) where.roce = { gte: minROCE };
     if (maxPB && maxPB > 0) where.pbRatio = { lte: maxPB, gt: 0 };
-    const debtFilter = buildRangeFilter(minDebt, maxDebtToEquity);
-    if (debtFilter) where.debtToEquity = debtFilter;
+    const debtFilter: Record<string, number> = {};
+    if (typeof minDebt === 'number' && Number.isFinite(minDebt) && minDebt >= 0) {
+      debtFilter.gte = minDebt;
+    }
+    if (typeof maxDebtToEquity === 'number' && Number.isFinite(maxDebtToEquity) && maxDebtToEquity >= 0) {
+      debtFilter.lte = maxDebtToEquity;
+    }
+    if (Object.keys(debtFilter).length > 0) where.debtToEquity = debtFilter;
     if (minDividendYield && minDividendYield > 0) where.dividendYield = { gte: minDividendYield };
     if (minSalesGrowth5yr && minSalesGrowth5yr > 0) where.salesGrowth5yr = { gte: minSalesGrowth5yr };
     if (minProfitGrowth5yr && minProfitGrowth5yr > 0) where.profitVar5yr = { gte: minProfitGrowth5yr };
