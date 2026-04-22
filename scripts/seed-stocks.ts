@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { getNSEBroadMarketUniverse } from '../lib/nse';
 
 const prisma = new PrismaClient();
 
@@ -727,6 +728,54 @@ const STOCKS = [
   },
 ];
 
+const TARGET_UNIVERSE_SIZE = 1000;
+const UNIVERSE_BATCH_SIZE = 200;
+
+function inferMarketCapCategory(currentPrice: number): string {
+  if (currentPrice >= 2000) return 'Large Cap';
+  if (currentPrice >= 500) return 'Mid Cap';
+  return 'Small Cap';
+}
+
+async function syncBroadUniverseFromNSE(existingSymbols: Set<string>): Promise<number> {
+  const nseUniverse = await getNSEBroadMarketUniverse();
+  if (nseUniverse.length === 0) {
+    console.warn('⚠️ NSE universe sync skipped (no rows returned).');
+    return 0;
+  }
+
+  const rowsToCreate = nseUniverse
+    .filter((stock) => !existingSymbols.has(stock.symbol))
+    .map((stock) => ({
+      symbol: stock.symbol,
+      name: stock.companyName || stock.symbol,
+      exchange: 'NSE',
+      sector: '',
+      industry: '',
+      marketCap: 0,
+      marketCapCategory: inferMarketCapCategory(stock.currentPrice),
+      currentPrice: stock.currentPrice,
+      high52w: stock.high52w,
+      low52w: stock.low52w,
+      lastUpdated: new Date(),
+    }));
+
+  if (rowsToCreate.length === 0) {
+    return 0;
+  }
+
+  let created = 0;
+  for (let idx = 0; idx < rowsToCreate.length; idx += UNIVERSE_BATCH_SIZE) {
+    const chunk = rowsToCreate.slice(idx, idx + UNIVERSE_BATCH_SIZE);
+    for (const row of chunk) {
+      await prisma.stock.create({ data: row });
+      created += 1;
+    }
+  }
+
+  return created;
+}
+
 async function main() {
   console.log('🌱 Seeding stocks database...');
 
@@ -746,7 +795,20 @@ async function main() {
     }
   }
 
+  const existingCount = await prisma.stock.count();
+  let universeAdded = 0;
+
+  if (existingCount < TARGET_UNIVERSE_SIZE) {
+    console.log(`📡 Stock universe size is ${existingCount}. Attempting NSE sync towards ${TARGET_UNIVERSE_SIZE}+...`);
+    const existingSymbols = new Set(
+      (await prisma.stock.findMany({ select: { symbol: true } })).map((stock) => stock.symbol)
+    );
+    universeAdded = await syncBroadUniverseFromNSE(existingSymbols);
+  }
+
+  const finalCount = await prisma.stock.count();
   console.log(`✅ Seeded ${STOCKS.length} stocks (${created} new, ${updated} updated)`);
+  console.log(`🌐 Universe sync added ${universeAdded} stocks (total universe: ${finalCount})`);
   console.log('⚠️  Note: Stock data is illustrative only — not financial advice');
 }
 

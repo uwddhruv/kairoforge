@@ -92,6 +92,23 @@ export interface NSEIndex {
   advance: { declines: number; advances: number; unchanged: number };
 }
 
+export interface NSEUniverseStock {
+  symbol: string;
+  companyName: string;
+  currentPrice: number;
+  high52w: number;
+  low52w: number;
+}
+
+function toFiniteNumber(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/,/g, '').trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
 /** Get real-time quote for a symbol */
 export async function getNSEQuote(symbol: string): Promise<NSEQuote | null> {
   try {
@@ -134,6 +151,51 @@ export async function getTopLosers(): Promise<NSEQuote[]> {
   try {
     const data = await nseGet<{ data: NSEQuote[] }>('/live-analysis-variations?index=losers');
     return (data.data ?? []).slice(0, 10);
+  } catch {
+    return [];
+  }
+}
+
+/** Get broad NSE stock universe (pre-open ALL list) */
+export async function getNSEBroadMarketUniverse(): Promise<NSEUniverseStock[]> {
+  try {
+    const data = await nseGet<{
+      data?: Array<{
+        metadata?: {
+          symbol?: string;
+          companyName?: string;
+          lastPrice?: number | string;
+          previousClose?: number | string;
+          finalPrice?: number | string;
+          yearHigh?: number | string;
+          yearLow?: number | string;
+        };
+      }>;
+    }>('/market-data-pre-open?key=ALL');
+
+    const rawRows = Array.isArray(data?.data) ? data.data : [];
+    const deduped = new Map<string, NSEUniverseStock>();
+
+    for (const row of rawRows) {
+      const meta = row?.metadata;
+      const symbol = meta?.symbol?.trim().toUpperCase();
+      if (!symbol) continue;
+
+      const currentPrice = toFiniteNumber(meta?.lastPrice) || toFiniteNumber(meta?.finalPrice) || toFiniteNumber(meta?.previousClose);
+      const companyName = meta?.companyName?.trim() || symbol;
+      const high52w = toFiniteNumber(meta?.yearHigh);
+      const low52w = toFiniteNumber(meta?.yearLow);
+
+      deduped.set(symbol, {
+        symbol,
+        companyName,
+        currentPrice,
+        high52w,
+        low52w,
+      });
+    }
+
+    return Array.from(deduped.values());
   } catch {
     return [];
   }

@@ -17,7 +17,7 @@ function getProviders(): LlmProvider[] {
     providers.push({
       name: 'openai',
       apiKey: process.env.OPENAI_API_KEY,
-      model: process.env.OPENAI_MODEL ?? 'gpt-4o',
+      model: process.env.OPENAI_MODEL ?? 'gpt-4.1',
       baseURL: process.env.OPENAI_BASE_URL,
       supportsJsonResponseFormat: true,
     });
