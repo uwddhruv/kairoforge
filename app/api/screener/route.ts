@@ -113,14 +113,12 @@ function buildRangeFilter(min?: number, max?: number, positiveOnly = false): Rec
 }
 
 function toPositiveFiniteNumber(value: unknown, allowZero = false): number | undefined {
-  const minAllowed = allowZero ? 0 : Number.EPSILON;
-
-  if (typeof value === 'number' && Number.isFinite(value) && value >= minAllowed) {
+  if (typeof value === 'number' && Number.isFinite(value) && (allowZero ? value >= 0 : value > 0)) {
     return value;
   }
   if (typeof value === 'string') {
     const parsed = Number(value.trim());
-    if (Number.isFinite(parsed) && parsed >= minAllowed) return parsed;
+    if (Number.isFinite(parsed) && (allowZero ? parsed >= 0 : parsed > 0)) return parsed;
   }
   return undefined;
 }
@@ -135,7 +133,7 @@ function normalizeText(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function hasMeaningfulFilterValue(value: unknown): boolean {
+function hasPositiveMeaningfulFilterValue(value: unknown): boolean {
   if (value === null || value === undefined) return false;
   if (typeof value === 'string') return value.trim().length > 0;
   if (typeof value === 'number') return Number.isFinite(value) && value > 0;
@@ -180,7 +178,7 @@ function mergeParsedFilters(
       continue;
     }
 
-    if (!hasMeaningfulFilterValue(value)) continue;
+    if (!hasPositiveMeaningfulFilterValue(value)) continue;
     merged[key] = value;
   }
 
