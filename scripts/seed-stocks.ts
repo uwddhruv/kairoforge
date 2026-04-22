@@ -731,10 +731,6 @@ const STOCKS = [
 const TARGET_UNIVERSE_SIZE = 1000;
 const UNIVERSE_BATCH_SIZE = 200;
 
-function inferMarketCapCategory(currentPrice: number): string {
-  return currentPrice > 0 ? 'Unknown' : 'Small Cap';
-}
-
 async function syncBroadUniverseFromNSE(existingSymbols: Set<string>): Promise<number> {
   const nseUniverse = await getNSEBroadMarketUniverse();
   if (nseUniverse.length === 0) {
@@ -751,7 +747,7 @@ async function syncBroadUniverseFromNSE(existingSymbols: Set<string>): Promise<n
       sector: '',
       industry: '',
       marketCap: 0,
-      marketCapCategory: inferMarketCapCategory(stock.currentPrice),
+      marketCapCategory: 'Unknown',
       currentPrice: stock.currentPrice,
       high52w: stock.high52w,
       low52w: stock.low52w,

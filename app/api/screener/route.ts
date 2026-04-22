@@ -888,7 +888,7 @@ function extractSearchTokens(query: string, maxTokens: number, extraTokens: stri
 }
 
 function buildExplanation(primary?: string | null, warning?: string | null): string | undefined {
-  const merged = [primary, warning].filter((part): part is string => Boolean(part && part.trim().length > 0));
+  const merged = [primary, warning].filter((part) => part?.trim());
   return merged.length > 0 ? merged.join(' ') : undefined;
 }
 
