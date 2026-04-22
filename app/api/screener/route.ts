@@ -167,13 +167,18 @@ function mergeParsedFilters(
   return merged;
 }
 
-function swapIfRangeInverted(filters: Record<string, unknown>, minKey: string, maxKey: string) {
+function swapIfRangeInverted(
+  filters: Record<string, unknown>,
+  minKey: string,
+  maxKey: string
+): Record<string, unknown> {
   const minValue = filters[minKey];
   const maxValue = filters[maxKey];
   if (typeof minValue === 'number' && typeof maxValue === 'number' && minValue > maxValue) {
     filters[minKey] = maxValue;
     filters[maxKey] = minValue;
   }
+  return filters;
 }
 
 function normalizeParsedFilters(rawFilters: Record<string, unknown>, query: string): Record<string, unknown> {
@@ -215,10 +220,10 @@ function normalizeParsedFilters(rawFilters: Record<string, unknown>, query: stri
   const explanation = normalizeText(rawFilters.explanation);
   if (explanation) normalized.explanation = explanation;
 
-  const providedKeywords = Array.isArray(rawFilters.keywords)
+  const parsedKeywords = Array.isArray(rawFilters.keywords)
     ? rawFilters.keywords.map((value) => String(value))
     : [];
-  const normalizedKeywords = extractSearchTokens(query, MAX_KEYWORD_TOKENS, providedKeywords);
+  const normalizedKeywords = extractSearchTokens(query, MAX_KEYWORD_TOKENS, parsedKeywords);
   if (normalizedKeywords.length > 0) {
     normalized.keywords = normalizedKeywords;
   }
@@ -229,8 +234,6 @@ function normalizeParsedFilters(rawFilters: Record<string, unknown>, query: stri
   swapIfRangeInverted(normalized, 'minIntrinsicValue', 'maxIntrinsicValue');
   swapIfRangeInverted(normalized, 'minGrahamNumber', 'maxGrahamNumber');
   swapIfRangeInverted(normalized, 'minDebt', 'maxDebt');
-  swapIfRangeInverted(normalized, 'minHigh52w', 'maxLow52w');
-
   return normalized;
 }
 
