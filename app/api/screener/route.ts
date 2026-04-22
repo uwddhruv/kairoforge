@@ -15,6 +15,7 @@ const MAX_KEYWORD_TOKENS = 10;
 const LLM_RANK_CANDIDATE_LIMIT = 60;
 const BACKFILL_FETCH_MULTIPLIER = 2;
 const MAX_DEBT_FREE_THRESHOLD = 0.1;
+const TARGET_UNIVERSE_SIZE = 1000;
 const RELEVANCE_WEIGHTS = {
   exactSymbol: 120,
   symbolPrefix: 80,
@@ -643,15 +644,20 @@ function parseScreenerQueryLocally(query: string): Record<string, unknown> {
   return filters;
 }
 
-async function runFallbackSearch(query: string, explanation: string, extraTokens: string[] = []) {
+async function runFallbackSearch(
+  query: string,
+  explanation: string,
+  extraTokens: string[] = [],
+  universeCount?: number
+) {
   const trimmed = query.trim();
   if (!trimmed) {
-    return NextResponse.json({ results: [], count: 0, explanation });
+    return NextResponse.json({ results: [], count: 0, explanation, universeCount });
   }
 
   const tokens = extractSearchTokens(trimmed, MAX_FALLBACK_TOKENS, extraTokens);
   if (tokens.length === 0) {
-    return NextResponse.json({ results: [], count: 0, filters: null, explanation });
+    return NextResponse.json({ results: [], count: 0, filters: null, explanation, universeCount });
   }
 
   const ors = tokens.flatMap((token) => [
@@ -691,6 +697,7 @@ async function runFallbackSearch(query: string, explanation: string, extraTokens
     count: results.length,
     filters: null,
     explanation,
+    universeCount,
   });
 }
 
@@ -880,6 +887,11 @@ function extractSearchTokens(query: string, maxTokens: number, extraTokens: stri
     .slice(0, maxTokens);
 }
 
+function buildExplanation(primary?: string | null, warning?: string | null): string | undefined {
+  const merged = [primary, warning].filter((part) => part?.trim());
+  return merged.length > 0 ? merged.join(' ') : undefined;
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
@@ -943,6 +955,12 @@ export async function POST(req: NextRequest) {
     if (!query?.trim()) {
       return NextResponse.json({ error: 'Query required' }, { status: 400 });
     }
+
+    const universeCount = await prisma.stock.count();
+    const universeWarning =
+      universeCount < TARGET_UNIVERSE_SIZE
+        ? `Universe currently has ${universeCount} stocks. Run db:setup in an environment with NSE access to expand toward ${TARGET_UNIVERSE_SIZE}+ symbols.`
+        : null;
 
     // Parse query with AI, or local fallback parser
     const localFilters = parseScreenerQueryLocally(query);
@@ -1093,8 +1111,9 @@ export async function POST(req: NextRequest) {
     if (!hasStructuredFilters) {
       return runFallbackSearch(
         query,
-        parseFallbackExplanation ?? FALLBACK_EXPLANATIONS.noStrictMatches,
-        keywords ?? []
+        buildExplanation(parseFallbackExplanation ?? FALLBACK_EXPLANATIONS.noStrictMatches, universeWarning) ?? '',
+        keywords ?? [],
+        universeCount
       );
     }
 
@@ -1208,7 +1227,12 @@ export async function POST(req: NextRequest) {
     });
 
     if (strictFiltered.length === 0) {
-      return runFallbackSearch(query, FALLBACK_EXPLANATIONS.noStrictMatches, keywords ?? []);
+      return runFallbackSearch(
+        query,
+        buildExplanation(FALLBACK_EXPLANATIONS.noStrictMatches, universeWarning) ?? '',
+        keywords ?? [],
+        universeCount
+      );
     }
 
     const seenSymbols = new Set(strictFiltered.map((stock) => stock.symbol));
@@ -1329,7 +1353,8 @@ export async function POST(req: NextRequest) {
       results,
       count: results.length,
       filters,
-      explanation: explanation ?? parseFallbackExplanation,
+      explanation: buildExplanation(explanation ?? parseFallbackExplanation, universeWarning),
+      universeCount,
     });
   } catch (err) {
     console.error('AI Screener POST error:', err);
