@@ -887,6 +887,11 @@ function extractSearchTokens(query: string, maxTokens: number, extraTokens: stri
     .slice(0, maxTokens);
 }
 
+function buildExplanation(primary?: string | null, warning?: string | null): string | undefined {
+  const merged = [primary, warning].filter((part): part is string => Boolean(part && part.trim().length > 0));
+  return merged.length > 0 ? merged.join(' ') : undefined;
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
@@ -1106,9 +1111,7 @@ export async function POST(req: NextRequest) {
     if (!hasStructuredFilters) {
       return runFallbackSearch(
         query,
-        [parseFallbackExplanation ?? FALLBACK_EXPLANATIONS.noStrictMatches, universeWarning]
-          .filter(Boolean)
-          .join(' '),
+        buildExplanation(parseFallbackExplanation ?? FALLBACK_EXPLANATIONS.noStrictMatches, universeWarning) ?? '',
         keywords ?? [],
         universeCount
       );
@@ -1226,7 +1229,7 @@ export async function POST(req: NextRequest) {
     if (strictFiltered.length === 0) {
       return runFallbackSearch(
         query,
-        [FALLBACK_EXPLANATIONS.noStrictMatches, universeWarning].filter(Boolean).join(' '),
+        buildExplanation(FALLBACK_EXPLANATIONS.noStrictMatches, universeWarning) ?? '',
         keywords ?? [],
         universeCount
       );
@@ -1350,7 +1353,7 @@ export async function POST(req: NextRequest) {
       results,
       count: results.length,
       filters,
-      explanation: [explanation ?? parseFallbackExplanation, universeWarning].filter(Boolean).join(' '),
+      explanation: buildExplanation(explanation ?? parseFallbackExplanation, universeWarning),
       universeCount,
     });
   } catch (err) {

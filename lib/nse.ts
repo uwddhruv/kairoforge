@@ -31,7 +31,8 @@ async function refreshNSESession(): Promise<void> {
       };
     }
   } catch (err) {
-    console.error('Failed to refresh NSE session:', err);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('Failed to refresh NSE session:', message);
   }
 }
 

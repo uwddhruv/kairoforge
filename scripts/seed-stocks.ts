@@ -732,9 +732,7 @@ const TARGET_UNIVERSE_SIZE = 1000;
 const UNIVERSE_BATCH_SIZE = 200;
 
 function inferMarketCapCategory(currentPrice: number): string {
-  if (currentPrice >= 2000) return 'Large Cap';
-  if (currentPrice >= 500) return 'Mid Cap';
-  return 'Small Cap';
+  return currentPrice > 0 ? 'Unknown' : 'Small Cap';
 }
 
 async function syncBroadUniverseFromNSE(existingSymbols: Set<string>): Promise<number> {
@@ -767,10 +765,8 @@ async function syncBroadUniverseFromNSE(existingSymbols: Set<string>): Promise<n
   let created = 0;
   for (let idx = 0; idx < rowsToCreate.length; idx += UNIVERSE_BATCH_SIZE) {
     const chunk = rowsToCreate.slice(idx, idx + UNIVERSE_BATCH_SIZE);
-    for (const row of chunk) {
-      await prisma.stock.create({ data: row });
-      created += 1;
-    }
+    const result = await prisma.stock.createMany({ data: chunk });
+    created += result.count;
   }
 
   return created;
