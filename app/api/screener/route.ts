@@ -137,7 +137,15 @@ function hasMeaningfulFilterValue(value: unknown): boolean {
   if (typeof value === 'string') return value.trim().length > 0;
   if (typeof value === 'number') return Number.isFinite(value) && value > 0;
   if (typeof value === 'boolean') return value;
-  if (Array.isArray(value)) return value.some((item) => hasMeaningfulFilterValue(item));
+  if (Array.isArray(value)) {
+    return value.some((item) => {
+      if (item === null || item === undefined) return false;
+      if (typeof item === 'string') return item.trim().length > 0;
+      if (typeof item === 'number') return Number.isFinite(item) && item > 0;
+      if (typeof item === 'boolean') return item;
+      return true;
+    });
+  }
   return true;
 }
 
@@ -172,17 +180,18 @@ function swapIfRangeInverted(
   minKey: string,
   maxKey: string
 ): Record<string, unknown> {
+  const nextFilters = { ...filters };
   const minValue = filters[minKey];
   const maxValue = filters[maxKey];
   if (typeof minValue === 'number' && typeof maxValue === 'number' && minValue > maxValue) {
-    filters[minKey] = maxValue;
-    filters[maxKey] = minValue;
+    nextFilters[minKey] = maxValue;
+    nextFilters[maxKey] = minValue;
   }
-  return filters;
+  return nextFilters;
 }
 
 function normalizeParsedFilters(rawFilters: Record<string, unknown>, query: string): Record<string, unknown> {
-  const normalized: Record<string, unknown> = {};
+  let normalized: Record<string, unknown> = {};
 
   const sector = normalizeText(rawFilters.sector);
   if (sector) normalized.sector = sector;
@@ -228,12 +237,12 @@ function normalizeParsedFilters(rawFilters: Record<string, unknown>, query: stri
     normalized.keywords = normalizedKeywords;
   }
 
-  swapIfRangeInverted(normalized, 'minMarketCap', 'maxMarketCap');
-  swapIfRangeInverted(normalized, 'minCurrentPrice', 'maxCurrentPrice');
-  swapIfRangeInverted(normalized, 'minBookValue', 'maxBookValue');
-  swapIfRangeInverted(normalized, 'minIntrinsicValue', 'maxIntrinsicValue');
-  swapIfRangeInverted(normalized, 'minGrahamNumber', 'maxGrahamNumber');
-  swapIfRangeInverted(normalized, 'minDebt', 'maxDebt');
+  normalized = swapIfRangeInverted(normalized, 'minMarketCap', 'maxMarketCap');
+  normalized = swapIfRangeInverted(normalized, 'minCurrentPrice', 'maxCurrentPrice');
+  normalized = swapIfRangeInverted(normalized, 'minBookValue', 'maxBookValue');
+  normalized = swapIfRangeInverted(normalized, 'minIntrinsicValue', 'maxIntrinsicValue');
+  normalized = swapIfRangeInverted(normalized, 'minGrahamNumber', 'maxGrahamNumber');
+  normalized = swapIfRangeInverted(normalized, 'minDebt', 'maxDebt');
   return normalized;
 }
 
@@ -834,15 +843,17 @@ function appendUniqueStocks(
 function extractSearchTokens(query: string, maxTokens: number, extraTokens: string[] = []): string[] {
   const cleanedQueryTokens = query
     .split(/[^A-Za-z0-9&]+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0)
-    .map((token) => ({ original: token, normalized: token.toLowerCase() }))
-    .filter(({ original, normalized }) => {
-      if (STOP_WORDS.has(normalized)) return false;
-      if (normalized.length >= MIN_SEARCH_TOKEN_LENGTH) return true;
-      return /^[A-Z0-9]{2,5}$/.test(original);
-    })
-    .map(({ normalized }) => normalized);
+    .reduce<string[]>((tokens, token) => {
+      const original = token.trim();
+      if (!original) return tokens;
+
+      const normalized = original.toLowerCase();
+      if (STOP_WORDS.has(normalized)) return tokens;
+      if (normalized.length >= MIN_SEARCH_TOKEN_LENGTH || /^[A-Z0-9]{2,5}$/.test(original)) {
+        tokens.push(normalized);
+      }
+      return tokens;
+    }, []);
 
   const cleanedExtraTokens = extraTokens
     .map((token) => String(token).toLowerCase().trim())
